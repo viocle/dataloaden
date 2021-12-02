@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vektah/dataloaden/example"
+	"github.com/viocle/dataloaden/example"
 )
 
 func TestUserLoader(t *testing.T) {

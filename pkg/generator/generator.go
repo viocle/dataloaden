@@ -78,19 +78,23 @@ func parseType(str string) (*goType, error) {
 	return t, nil
 }
 
-func Generate(name string, keyType string, valueType string, wd string) error {
+func GenerateWithPrefix(fileNamePrefix, name string, keyType string, valueType string, wd string) error {
 	data, err := getData(name, keyType, valueType, wd)
 	if err != nil {
 		return err
 	}
 
-	filename := strings.ToLower(data.Name) + "_gen.go"
+	filename := fmt.Sprintf("%s%s_gen.go", fileNamePrefix, ToLowerCamel(data.Name))
 
 	if err := writeTemplate(filepath.Join(wd, filename), data); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func Generate(name string, keyType string, valueType string, wd string) error {
+	return GenerateWithPrefix("", name, keyType, valueType, wd)
 }
 
 func getData(name string, keyType string, valueType string, wd string) (templateData, error) {
