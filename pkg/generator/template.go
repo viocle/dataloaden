@@ -29,6 +29,18 @@ type {{.Name}}Config struct {
 
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
 	MaxBatch int
+
+	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
+	ExpireAfter time.Duration
+}
+
+// {{.Name}}CacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0 
+type {{.Name}}CacheItem struct {
+	// Expires contains the time this CacheItem expires
+	Expires time.Time
+
+	// Value contains the cached {{.ValType.String}}
+	Value {{.ValType.String}}
 }
 
 // New{{.Name}} creates a new {{.Name}} given a fetch, wait, and maxBatch
@@ -37,6 +49,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 		fetch: config.Fetch,
 		wait: config.Wait,
 		maxBatch: config.MaxBatch,
+		expireAfter:config.ExpireAfter,
 	}
 }
 
@@ -51,9 +64,13 @@ type {{.Name}} struct {
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
 
+	// this will determine if cache expiration will be used
+	expireAfter time.Duration
+
 	// INTERNAL
 
 	// lazily created cache
+	cacheExpire map[{{.KeyType.String}}]*{{.Name}}CacheItem
 	cache map[{{.KeyType.String}}]{{.ValType.String}}
 
 	// the current batch. keys will continue to be collected until timeout is hit,
@@ -82,10 +99,26 @@ func (l *{{.Name}}) Load(key {{.KeyType.String}}) ({{.ValType.String}}, error) {
 // different data loaders without blocking until the thunk is called.
 func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) func() ({{.ValType.String}}, error) {
 	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
-		return func() ({{.ValType.String}}, error) {
-			return it, nil
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if it, ok := l.cache[key]; ok {
+			l.mu.Unlock()
+			return func() ({{.ValType.String}}, error) {
+				return it, nil
+			}
+		}
+	} else {
+		// using cache expiration
+		if it, ok := l.cacheExpire[key]; ok {
+			l.mu.Unlock()
+			if it != nil && time.Now().Before(it.Expires) {
+				return func() ({{.ValType.String}}, error) {
+					return it.Value, nil
+				}
+			}
+			// cache item has expired, clear from cache and re-lock
+			l.Clear(key)
+			l.mu.Lock()
 		}
 	}
 	if l.batch == nil {
@@ -162,21 +195,42 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
 	l.mu.Lock()
 	var found bool
-	if _, found = l.cache[key]; !found {
-		{{- if .ValType.IsPtr }}
-			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-			// and end up with the whole cache pointing to the same value.
-			cpy := *value
-			l.unsafeSet(key, &cpy)
-		{{- else if .ValType.IsSlice }}
-			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-			// and end up with the whole cache pointing to the same value.
-			cpy := make({{.ValType.String}}, len(value))
-			copy(cpy, value)
-			l.unsafeSet(key, cpy)
-		{{- else }}
-			l.unsafeSet(key, value)
-		{{- end }}
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if _, found = l.cache[key]; !found {
+			{{- if .ValType.IsPtr }}
+				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+				// and end up with the whole cache pointing to the same value.
+				cpy := *value
+				l.unsafeSet(key, &cpy)
+			{{- else if .ValType.IsSlice }}
+				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+				// and end up with the whole cache pointing to the same value.
+				cpy := make({{.ValType.String}}, len(value))
+				copy(cpy, value)
+				l.unsafeSet(key, cpy)
+			{{- else }}
+				l.unsafeSet(key, value)
+			{{- end }}
+		}
+	} else {
+		// using cache expiration
+		if _, found = l.cacheExpire[key]; !found {
+			{{- if .ValType.IsPtr }}
+				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+				// and end up with the whole cache pointing to the same value.
+				cpy := *value
+				l.unsafeSet(key, &cpy)
+			{{- else if .ValType.IsSlice }}
+				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+				// and end up with the whole cache pointing to the same value.
+				cpy := make({{.ValType.String}}, len(value))
+				copy(cpy, value)
+				l.unsafeSet(key, cpy)
+			{{- else }}
+				l.unsafeSet(key, value)
+			{{- end }}
+		}
 	}
 	l.mu.Unlock()
 	return !found
@@ -184,16 +238,33 @@ func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
 
 // Clear the value at key from the cache, if it exists
 func (l *{{.Name}}) Clear(key {{.KeyType}}) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		delete(l.cache, key)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		delete(l.cacheExpire, key)
+		l.mu.Unlock()
+	}
 }
 
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
-	if l.cache == nil {
-		l.cache = map[{{.KeyType}}]{{.ValType.String}}{}
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if l.cache == nil {
+			l.cache = map[{{.KeyType}}]{{.ValType.String}}{}
+		}
+		l.cache[key] = value
+	} else {
+		// using cache expiration
+		if l.cacheExpire == nil {
+			l.cacheExpire = map[{{.KeyType}}]*{{.Name}}CacheItem{}
+		}
+		l.cacheExpire[key] = &{{.Name}}CacheItem{Expires: time.Now().Add(l.expireAfter), Value: value}
 	}
-	l.cache[key] = value
 }
 
 // keyIndex will return the location of the key in the batch, if its not found
