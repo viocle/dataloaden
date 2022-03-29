@@ -95,3 +95,23 @@ func NewLoader(ctx context.Context) *UserLoader {
 ```
 
 If you feel like I'm wrong please raise an issue.
+
+#### What's different in this fork?
+
+1. Added cache expiration support. When creating a new loader, set the expireAfter time.Duration to the amount of time you want the cached items to be valid for.
+```go
+func NewLoader(ctx context.Context) *UserLoader {
+	return &UserLoader{
+		expireAfter: 30 * time.Minute, // each cached item will expire 30 minutes after being added
+		wait:     2 * time.Millisecond,
+		maxBatch: 100,
+		fetch: func(keys []string) ([]*User, []error) {
+			// ...
+		},
+	}
+}
+```
+
+2. Added ClearAll() which allows you to clear all cached items in loader
+3. Generated files will be in camelCase
+4. Added GenerateWithPrefix() which allows you to specify the prefix of a generated file
