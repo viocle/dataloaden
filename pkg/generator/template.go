@@ -251,17 +251,32 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 	}
 }
 
+// ClearAll clears all values from the cache
+func (l *{{.Name}}) ClearAll() {
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		l.cache = make(map[{{.KeyType}}]{{.ValType.String}}, 1)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		l.cacheExpire = make(map[{{.KeyType}}]*{{.Name}}CacheItem, 1)
+		l.mu.Unlock()
+	}
+}
+
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.expireAfter <= 0 {
 		// not using cache expiration
 		if l.cache == nil {
-			l.cache = map[{{.KeyType}}]{{.ValType.String}}{}
+			l.cache = make(map[{{.KeyType}}]{{.ValType.String}}, 1)
 		}
 		l.cache[key] = value
 	} else {
 		// using cache expiration
 		if l.cacheExpire == nil {
-			l.cacheExpire = map[{{.KeyType}}]*{{.Name}}CacheItem{}
+			l.cacheExpire = make(map[{{.KeyType}}]*{{.Name}}CacheItem, 1)
 		}
 		l.cacheExpire[key] = &{{.Name}}CacheItem{Expires: time.Now().Add(l.expireAfter), Value: value}
 	}
