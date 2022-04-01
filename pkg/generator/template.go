@@ -266,6 +266,22 @@ func (l *{{.Name}}) ClearAll() {
 	}
 }
 
+// ClearExpired clears all expired values from the cache if cache expiration is being used
+func (l *{{.Name}}) ClearExpired() {
+	if l.expireAfter > 0 {
+		// using cache expiration
+		tNow := time.Now()
+		l.mu.Lock()
+		for cacheKey, cacheItem := range l.cacheExpire {
+			if cacheItem != nil && !tNow.Before(cacheItem.Expires) {
+				// value has expired
+				delete(l.cacheExpire, cacheKey)
+			}
+		}
+		l.mu.Unlock()
+	}
+}
+
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.expireAfter <= 0 {
 		// not using cache expiration

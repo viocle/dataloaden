@@ -98,7 +98,7 @@ If you feel like I'm wrong please raise an issue.
 
 #### What's different in this fork?
 
-1. Added cache expiration support. When creating a new loader, set the expireAfter time.Duration to the amount of time you want the cached items to be valid for.
+1. Added cache expiration support. When creating a new loader, set the expireAfter time.Duration to the amount of time you want the cached items to be valid for. Cache expiration does not automatically remove the value from the loader's cache but will perform a new fetch if the value is expired.
 ```go
 func NewLoader(ctx context.Context) *UserLoader {
 	return &UserLoader{
@@ -115,3 +115,4 @@ func NewLoader(ctx context.Context) *UserLoader {
 2. Added ClearAll() which allows you to clear all cached items in loader
 3. Generated files will be in camelCase
 4. Added GenerateWithPrefix() which allows you to specify the prefix of a generated file
+5. Added ClearExpired() which allow you to clear all expired cached items in loader
