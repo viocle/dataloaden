@@ -24,10 +24,10 @@ type {{.Name}}Config struct {
 	// Fetch is a method that provides the data for the loader 
 	Fetch func(keys []{{.KeyType.String}}) ([]{{.ValType.String}}, []error)
 
-	// Wait is how long wait before sending a batch
+	// Wait is how long to wait before sending a batch
 	Wait time.Duration
 
-	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
+	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
 
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
