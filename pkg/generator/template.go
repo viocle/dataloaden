@@ -21,7 +21,7 @@ import (
 
 // {{.Name}}Config captures the config to create a new {{.Name}}
 type {{.Name}}Config struct {
-	// Fetch is a method that provides the data for the loader 
+	// Fetch is a method that provides the data for the loader
 	Fetch func(keys []{{.KeyType.String}}) ([]{{.ValType.String}}, []error)
 
 	// Wait is how long to wait before sending a batch
@@ -58,6 +58,14 @@ type {{.Name}} struct {
 	// this method provides the data for the loader
 	fetch func(keys []{{.KeyType.String}}) ([]{{.ValType.String}}, []error)
 
+	// lazily created cache
+	cacheExpire map[{{.KeyType.String}}]*{{.Name}}CacheItem
+	cache map[{{.KeyType.String}}]{{.ValType.String}}
+
+	// the current batch. keys will continue to be collected until timeout is hit,
+	// then everything will be sent to the fetch method and out to the listeners
+	batch *{{.Name|lcFirst}}Batch
+
 	// how long to done before sending a batch
 	wait time.Duration
 
@@ -67,26 +75,16 @@ type {{.Name}} struct {
 	// this will determine if cache expiration will be used
 	expireAfter time.Duration
 
-	// INTERNAL
-
-	// lazily created cache
-	cacheExpire map[{{.KeyType.String}}]*{{.Name}}CacheItem
-	cache map[{{.KeyType.String}}]{{.ValType.String}}
-
-	// the current batch. keys will continue to be collected until timeout is hit,
-	// then everything will be sent to the fetch method and out to the listeners
-	batch *{{.Name|lcFirst}}Batch
-
 	// mutex to prevent races
 	mu sync.Mutex
 }
 
 type {{.Name|lcFirst}}Batch struct {
+	done    chan struct{}
 	keys    []{{.KeyType}}
 	data    []{{.ValType.String}}
 	error   []error
 	closing bool
-	done    chan struct{}
 }
 
 // Load a {{.ValType.Name}} by key, batching and caching will be applied automatically
