@@ -14,19 +14,36 @@ type UserLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
 	Fetch func(keys []string) ([]*example.User, []error)
 
-	// Wait is how long wait before sending a batch
+	// Wait is how long to wait before sending a batch
 	Wait time.Duration
 
-	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
+	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
+
+	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
+	ExpireAfter time.Duration
+}
+
+// UserLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
+type UserLoaderCacheItem struct {
+	// Expires contains the time this CacheItem expires
+	Expires time.Time
+
+	// Value contains the cached *example.User
+	Value *example.User
+}
+
+func (c *UserLoaderCacheItem) expired() bool {
+	return c.Expires.Before(time.Now())
 }
 
 // NewUserLoader creates a new UserLoader given a fetch, wait, and maxBatch
 func NewUserLoader(config UserLoaderConfig) *UserLoader {
 	return &UserLoader{
-		fetch:    config.Fetch,
-		wait:     config.Wait,
-		maxBatch: config.MaxBatch,
+		fetch:       config.Fetch,
+		wait:        config.Wait,
+		maxBatch:    config.MaxBatch,
+		expireAfter: config.ExpireAfter,
 	}
 }
 
@@ -35,31 +52,33 @@ type UserLoader struct {
 	// this method provides the data for the loader
 	fetch func(keys []string) ([]*example.User, []error)
 
+	// lazily created cache
+	cacheExpire map[string]*UserLoaderCacheItem
+	cache       map[string]*example.User
+
+	// the current batch. keys will continue to be collected until timeout is hit,
+	// then everything will be sent to the fetch method and out to the listeners
+	batch *userLoaderBatch
+
 	// how long to done before sending a batch
 	wait time.Duration
 
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
 
-	// INTERNAL
-
-	// lazily created cache
-	cache map[string]*example.User
-
-	// the current batch. keys will continue to be collected until timeout is hit,
-	// then everything will be sent to the fetch method and out to the listeners
-	batch *userLoaderBatch
+	// this will determine if cache expiration will be used
+	expireAfter time.Duration
 
 	// mutex to prevent races
 	mu sync.Mutex
 }
 
 type userLoaderBatch struct {
+	done    chan struct{}
 	keys    []string
 	data    []*example.User
 	error   []error
 	closing bool
-	done    chan struct{}
 }
 
 // Load a User by key, batching and caching will be applied automatically
@@ -72,10 +91,26 @@ func (l *UserLoader) Load(key string) (*example.User, error) {
 // different data loaders without blocking until the thunk is called.
 func (l *UserLoader) LoadThunk(key string) func() (*example.User, error) {
 	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
-		return func() (*example.User, error) {
-			return it, nil
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if it, ok := l.cache[key]; ok {
+			l.mu.Unlock()
+			return func() (*example.User, error) {
+				return it, nil
+			}
+		}
+	} else {
+		// using cache expiration
+		if it, ok := l.cacheExpire[key]; ok {
+			l.mu.Unlock()
+			if it != nil && !it.expired() {
+				return func() (*example.User, error) {
+					return it.Value, nil
+				}
+			}
+			// cache item has expired, clear from cache and re-lock
+			l.Clear(key)
+			l.mu.Lock()
 		}
 	}
 	if l.batch == nil {
@@ -146,34 +181,114 @@ func (l *UserLoader) LoadAllThunk(keys []string) func() ([]*example.User, []erro
 	}
 }
 
+// unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
+func (l *UserLoader) unsafePrime(key string, value *example.User) bool {
+	var found bool
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if _, found = l.cache[key]; !found {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := *value
+			l.unsafeSet(key, &cpy)
+		}
+	} else {
+		// using cache expiration
+		if _, found = l.cacheExpire[key]; !found {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := *value
+			l.unsafeSet(key, &cpy)
+		}
+	}
+	return !found
+}
+
+// PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
+func (l *UserLoader) PrimeMany(keys []string, values []*example.User) []bool {
+	if len(keys) != len(values) {
+		// keys and values must be the same length
+		return make([]bool, len(keys))
+	}
+	ret := make([]bool, len(keys))
+	l.mu.Lock()
+	for i, key := range keys {
+		ret[i] = l.unsafePrime(key, values[i])
+	}
+	l.mu.Unlock()
+	return ret
+}
+
 // Prime the cache with the provided key and value. If the key already exists, no change is made
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *UserLoader) Prime(key string, value *example.User) bool {
 	l.mu.Lock()
-	var found bool
-	if _, found = l.cache[key]; !found {
-		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-		// and end up with the whole cache pointing to the same value.
-		cpy := *value
-		l.unsafeSet(key, &cpy)
-	}
+	found := l.unsafePrime(key, value)
 	l.mu.Unlock()
-	return !found
+	return found
 }
 
 // Clear the value at key from the cache, if it exists
 func (l *UserLoader) Clear(key string) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		delete(l.cache, key)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		delete(l.cacheExpire, key)
+		l.mu.Unlock()
+	}
+}
+
+// ClearAll clears all values from the cache
+func (l *UserLoader) ClearAll() {
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		l.cache = make(map[string]*example.User, 1)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		l.cacheExpire = make(map[string]*UserLoaderCacheItem, 1)
+		l.mu.Unlock()
+	}
+}
+
+// ClearExpired clears all expired values from the cache if cache expiration is being used
+func (l *UserLoader) ClearExpired() {
+	if l.expireAfter > 0 {
+		// using cache expiration
+		tNow := time.Now()
+		l.mu.Lock()
+		for cacheKey, cacheItem := range l.cacheExpire {
+			if cacheItem != nil && !tNow.Before(cacheItem.Expires) {
+				// value has expired
+				delete(l.cacheExpire, cacheKey)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func (l *UserLoader) unsafeSet(key string, value *example.User) {
-	if l.cache == nil {
-		l.cache = map[string]*example.User{}
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if l.cache == nil {
+			l.cache = make(map[string]*example.User, 1)
+		}
+		l.cache[key] = value
+	} else {
+		// using cache expiration
+		if l.cacheExpire == nil {
+			l.cacheExpire = make(map[string]*UserLoaderCacheItem, 1)
+		}
+		l.cacheExpire[key] = &UserLoaderCacheItem{Expires: time.Now().Add(l.expireAfter), Value: value}
 	}
-	l.cache[key] = value
 }
 
 // keyIndex will return the location of the key in the batch, if its not found

@@ -14,19 +14,36 @@ type UserSliceLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
 	Fetch func(keys []int) ([][]example.User, []error)
 
-	// Wait is how long wait before sending a batch
+	// Wait is how long to wait before sending a batch
 	Wait time.Duration
 
-	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = not limit
+	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
+
+	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
+	ExpireAfter time.Duration
+}
+
+// UserSliceLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
+type UserSliceLoaderCacheItem struct {
+	// Expires contains the time this CacheItem expires
+	Expires time.Time
+
+	// Value contains the cached []example.User
+	Value []example.User
+}
+
+func (c *UserSliceLoaderCacheItem) expired() bool {
+	return c.Expires.Before(time.Now())
 }
 
 // NewUserSliceLoader creates a new UserSliceLoader given a fetch, wait, and maxBatch
 func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 	return &UserSliceLoader{
-		fetch:    config.Fetch,
-		wait:     config.Wait,
-		maxBatch: config.MaxBatch,
+		fetch:       config.Fetch,
+		wait:        config.Wait,
+		maxBatch:    config.MaxBatch,
+		expireAfter: config.ExpireAfter,
 	}
 }
 
@@ -35,31 +52,33 @@ type UserSliceLoader struct {
 	// this method provides the data for the loader
 	fetch func(keys []int) ([][]example.User, []error)
 
+	// lazily created cache
+	cacheExpire map[int]*UserSliceLoaderCacheItem
+	cache       map[int][]example.User
+
+	// the current batch. keys will continue to be collected until timeout is hit,
+	// then everything will be sent to the fetch method and out to the listeners
+	batch *userSliceLoaderBatch
+
 	// how long to done before sending a batch
 	wait time.Duration
 
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
 
-	// INTERNAL
-
-	// lazily created cache
-	cache map[int][]example.User
-
-	// the current batch. keys will continue to be collected until timeout is hit,
-	// then everything will be sent to the fetch method and out to the listeners
-	batch *userSliceLoaderBatch
+	// this will determine if cache expiration will be used
+	expireAfter time.Duration
 
 	// mutex to prevent races
 	mu sync.Mutex
 }
 
 type userSliceLoaderBatch struct {
+	done    chan struct{}
 	keys    []int
 	data    [][]example.User
 	error   []error
 	closing bool
-	done    chan struct{}
 }
 
 // Load a User by key, batching and caching will be applied automatically
@@ -72,10 +91,26 @@ func (l *UserSliceLoader) Load(key int) ([]example.User, error) {
 // different data loaders without blocking until the thunk is called.
 func (l *UserSliceLoader) LoadThunk(key int) func() ([]example.User, error) {
 	l.mu.Lock()
-	if it, ok := l.cache[key]; ok {
-		l.mu.Unlock()
-		return func() ([]example.User, error) {
-			return it, nil
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if it, ok := l.cache[key]; ok {
+			l.mu.Unlock()
+			return func() ([]example.User, error) {
+				return it, nil
+			}
+		}
+	} else {
+		// using cache expiration
+		if it, ok := l.cacheExpire[key]; ok {
+			l.mu.Unlock()
+			if it != nil && !it.expired() {
+				return func() ([]example.User, error) {
+					return it.Value, nil
+				}
+			}
+			// cache item has expired, clear from cache and re-lock
+			l.Clear(key)
+			l.mu.Lock()
 		}
 	}
 	if l.batch == nil {
@@ -146,35 +181,116 @@ func (l *UserSliceLoader) LoadAllThunk(keys []int) func() ([][]example.User, []e
 	}
 }
 
+// unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
+func (l *UserSliceLoader) unsafePrime(key int, value []example.User) bool {
+	var found bool
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if _, found = l.cache[key]; !found {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := make([]example.User, len(value))
+			copy(cpy, value)
+			l.unsafeSet(key, cpy)
+		}
+	} else {
+		// using cache expiration
+		if _, found = l.cacheExpire[key]; !found {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := make([]example.User, len(value))
+			copy(cpy, value)
+			l.unsafeSet(key, cpy)
+		}
+	}
+	return !found
+}
+
+// PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
+func (l *UserSliceLoader) PrimeMany(keys []int, values [][]example.User) []bool {
+	if len(keys) != len(values) {
+		// keys and values must be the same length
+		return make([]bool, len(keys))
+	}
+	ret := make([]bool, len(keys))
+	l.mu.Lock()
+	for i, key := range keys {
+		ret[i] = l.unsafePrime(key, values[i])
+	}
+	l.mu.Unlock()
+	return ret
+}
+
 // Prime the cache with the provided key and value. If the key already exists, no change is made
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *UserSliceLoader) Prime(key int, value []example.User) bool {
 	l.mu.Lock()
-	var found bool
-	if _, found = l.cache[key]; !found {
-		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-		// and end up with the whole cache pointing to the same value.
-		cpy := make([]example.User, len(value))
-		copy(cpy, value)
-		l.unsafeSet(key, cpy)
-	}
+	found := l.unsafePrime(key, value)
 	l.mu.Unlock()
-	return !found
+	return found
 }
 
 // Clear the value at key from the cache, if it exists
 func (l *UserSliceLoader) Clear(key int) {
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		delete(l.cache, key)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		delete(l.cacheExpire, key)
+		l.mu.Unlock()
+	}
+}
+
+// ClearAll clears all values from the cache
+func (l *UserSliceLoader) ClearAll() {
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		l.mu.Lock()
+		l.cache = make(map[int][]example.User, 1)
+		l.mu.Unlock()
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		l.cacheExpire = make(map[int]*UserSliceLoaderCacheItem, 1)
+		l.mu.Unlock()
+	}
+}
+
+// ClearExpired clears all expired values from the cache if cache expiration is being used
+func (l *UserSliceLoader) ClearExpired() {
+	if l.expireAfter > 0 {
+		// using cache expiration
+		tNow := time.Now()
+		l.mu.Lock()
+		for cacheKey, cacheItem := range l.cacheExpire {
+			if cacheItem != nil && !tNow.Before(cacheItem.Expires) {
+				// value has expired
+				delete(l.cacheExpire, cacheKey)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 func (l *UserSliceLoader) unsafeSet(key int, value []example.User) {
-	if l.cache == nil {
-		l.cache = map[int][]example.User{}
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+		if l.cache == nil {
+			l.cache = make(map[int][]example.User, 1)
+		}
+		l.cache[key] = value
+	} else {
+		// using cache expiration
+		if l.cacheExpire == nil {
+			l.cacheExpire = make(map[int]*UserSliceLoaderCacheItem, 1)
+		}
+		l.cacheExpire[key] = &UserSliceLoaderCacheItem{Expires: time.Now().Add(l.expireAfter), Value: value}
 	}
-	l.cache[key] = value
 }
 
 // keyIndex will return the location of the key in the batch, if its not found
