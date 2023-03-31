@@ -78,6 +78,7 @@ func parseType(str string) (*goType, error) {
 	return t, nil
 }
 
+// GenerateWithPrefix generates a dataloader file with the specified file name prefix
 func GenerateWithPrefix(fileNamePrefix, name string, keyType string, valueType string, wd string) error {
 	data, err := getData(name, keyType, valueType, wd)
 	if err != nil {
@@ -93,6 +94,7 @@ func GenerateWithPrefix(fileNamePrefix, name string, keyType string, valueType s
 	return nil
 }
 
+// Generate dataloader file without a file name prefix
 func Generate(name string, keyType string, valueType string, wd string) error {
 	return GenerateWithPrefix("", name, keyType, valueType, wd)
 }

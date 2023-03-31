@@ -9,6 +9,7 @@ import (
 	"github.com/viocle/dataloaden/example"
 )
 
+// NewLoader returns a new *UserSliceLoader
 func NewLoader() *UserSliceLoader {
 	return &UserSliceLoader{
 		wait:     2 * time.Millisecond,
