@@ -145,4 +145,26 @@ func TestUserSliceLoader(t *testing.T) {
 		}
 	}
 
+	// load user 1 from the cache
+	if user, err := loader.Load(1); err != nil {
+		t.Errorf("Failed to load user 1: %v", err)
+	} else if len(user) != 1 {
+		t.Errorf("Expected 1 user, got %d", len(user))
+	} else if user[0].ID != "1" {
+		t.Errorf("Expected user 1, got %s", user[0].ID)
+	}
+
+	// ForcePrime cache with User 1 but change the name to User 1 Updated
+	loader.ForcePrime(1, []example.User{{ID: "1", Name: "user 1 updated"}})
+
+	// load user 1 from the cache and verify the name is User 1 Updated
+	if user, err := loader.Load(1); err != nil {
+		t.Errorf("Failed to load user 1: %v", err)
+	} else if len(user) != 1 {
+		t.Errorf("Expected 1 user, got %d", len(user))
+	} else if user[0].ID != "1" {
+		t.Errorf("Expected user 1, got %s", user[0].ID)
+	} else if user[0].Name != "user 1 updated" {
+		t.Errorf("Expected user 1 name to be user 1 updated, got %s", user[0].Name)
+	}
 }

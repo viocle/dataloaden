@@ -192,11 +192,14 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 }
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
-func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}) bool {
+func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}, forceReplace bool) bool {
 	var found bool
 	if l.expireAfter <= 0 {
 		// not using cache expiration
-		if _, found = l.cache[key]; !found {
+		if _, found = l.cache[key]; found && forceReplace {
+			delete(l.cache, key)
+		}
+		if !found || forceReplace {
 			{{- if .ValType.IsPtr }}
 				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
 				// and end up with the whole cache pointing to the same value.
@@ -214,7 +217,10 @@ func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}) boo
 		}
 	} else {
 		// using cache expiration
-		if _, found = l.cacheExpire[key]; !found {
+		if _, found = l.cacheExpire[key]; found && forceReplace  {
+			delete(l.cacheExpire, key)
+		}
+		if !found || forceReplace {
 			{{- if .ValType.IsPtr }}
 				// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
 				// and end up with the whole cache pointing to the same value.
@@ -231,7 +237,7 @@ func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}) boo
 			{{- end }}
 		}
 	}
-	return !found
+	return !found || forceReplace
 }
 
 // PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
@@ -243,7 +249,7 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 	ret := make([]bool, len(keys))
 	l.mu.Lock()
 	for i, key := range keys {
-		ret[i] = l.unsafePrime(key, values[i])
+		ret[i] = l.unsafePrime(key, values[i], false)
 	}
 	l.mu.Unlock()
 	return ret
@@ -254,9 +260,17 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
 	l.mu.Lock()
-	found := l.unsafePrime(key, value)
+	found := l.unsafePrime(key, value, false)
 	l.mu.Unlock()
 	return found
+}
+
+// ForcePrime the cache with the provided key and value. If the key already exists, value is replaced
+// (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
+func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
+	l.mu.Lock()
+	l.unsafePrime(key, value, true)
+	l.mu.Unlock()
 }
 
 // Clear the value at key from the cache, if it exists
