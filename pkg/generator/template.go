@@ -43,6 +43,7 @@ type {{.Name}}CacheItem struct {
 	Value {{.ValType.String}}
 }
 
+// expired returns true if the cache item has expired
 func (c *{{.Name}}CacheItem) expired() bool {
 	return c.Expires.Before(time.Now())
 }
@@ -112,15 +113,14 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) func() ({{.ValType.String
 	} else {
 		// using cache expiration
 		if it, ok := l.cacheExpire[key]; ok {
-			l.mu.Unlock()
 			if it != nil && !it.expired() {
+				l.mu.Unlock()
 				return func() ({{.ValType.String}}, error) {
 					return it.Value, nil
 				}
 			}
-			// cache item has expired, clear from cache and re-lock
-			l.Clear(key)
-			l.mu.Lock()
+			// cache item has expired, clear from cache
+			delete(l.cacheExpire, key)
 		}
 	}
 	if l.batch == nil {
@@ -319,6 +319,7 @@ func (l *{{.Name}}) ClearExpired() {
 	}
 }
 
+// unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.expireAfter <= 0 {
 		// not using cache expiration
@@ -361,6 +362,7 @@ func (b *{{.Name|lcFirst}}Batch) keyIndex(l *{{.Name}}, key {{.KeyType}}) int {
 	return pos
 }
 
+// startTimer will wait the desired wait time before sending the batch unless another batch limit had been reached
 func (b *{{.Name|lcFirst}}Batch) startTimer(l *{{.Name}}) {
 	time.Sleep(l.wait)
 	l.mu.Lock()
@@ -377,6 +379,7 @@ func (b *{{.Name|lcFirst}}Batch) startTimer(l *{{.Name}}) {
 	b.end(l)
 }
 
+// end calls fetch and closes the done channel to unblock all thunks
 func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 	b.data, b.error = l.fetch(b.keys)
 	close(b.done)
