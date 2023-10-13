@@ -29,7 +29,7 @@ func NewLoader() *UserLoader {
 	return NewUserLoader(UserLoaderConfig{
 		Wait:     2 * time.Millisecond,
 		MaxBatch: 100,
-		fetch: func(keys []string) ([]*User, []error) {
+		Fetch: func(keys []string) ([]*User, []error) {
 			users := make([]*User, len(keys))
 			errors := make([]error, len(keys))
 
@@ -126,7 +126,7 @@ This fork does have some breaking changes. Primary differences are:
 1. You must use the New{{Loader}} function with Config to create your dataloaders. Example: NewUserLoder(UserLoaderConfig{...})
 2. `Cache Expiration` when you want a long lived dataloader or one that is re-used across multiple requests but do want values to live forever.
 3. `Performance Improvements` around memory allocation, key lookup time in large batches, and removal of some unnecessary function wraping around cache hits.
-4. `Triggers` allow you to call a function after certain events like when a value is set, deleted, or expired in the cache.
+4. `Hooks` allow you to call a function after certain events like when a value is set, deleted, or expired in the cache.
 
 ##### All changes:
 1. Added cache expiration support. When creating a new loader, set the expireAfter time.Duration to the amount of time you want the cached items to be valid for. Cache expiration does not automatically remove the value from the loader's cache but will perform a new fetch if the value is expired when loading a key. Example usage for this would be to create your dataloader once and re-use it for all requests, not creating new ones for each request. This does mean you need to ensure you're properly clearing this dataloader when changes to the object occur so values in the dataloader do not become stale. Cache expiration can be completely removed from your generated code if you specify true in your generate call after your return type definition.
@@ -173,11 +173,13 @@ func clearDataLoaderExpiredCache() {
 9. Batches are pre-allocated and re-used to lower allocations between Loads.
 10. Batches now use a slice as well as a map for key store and lookup. There is a slight memory usage penalty for the duplicate key values in the map at the extra performance increase seen in lookups instead of iterating over the keys in the slice. You can see this new usage in the keyIndex function. This performance change is really apparent when you have large maxBatch values.
 11. LoadThunk has the option to now return the value directly instead of having to wrap the cache find in a function to be called. This change was implemented in LoadThunk and return checking is done in Load. If no function was returned then the returned value is to be used.
-12. You can define Trigger functions to be called after a key is set, cleared, when all keys are cleared, or an item is cleared because it has expired. 
-a.`TriggerAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `TriggerAfterSet` will not get set.
-b.`TriggerAfterClear`: When a key is cleared in the dataloader, this function will be called if defined. This does not occur when an existing key is being replaced or it's deleted because of expiration.
-c.`TriggerAfterClearAll`: When you call the `ClearAll` function to clear the entire dataloader cache, this function will be called if defined.
-d.`TriggerAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not triggered at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
+12. You can define Hook functions to be called after a key is set, cleared, when all keys are cleared, or an item is cleared because it has expired. 
+a.`HookAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `HookAfterSet` will not get set.
+b.`HookAfterClear`: When a key is cleared in the dataloader, this function will be called if defined. This does not occur when an existing key is being replaced or it's deleted because of expiration.
+c.`HookAfterClearAll`: When you call the `ClearAll` function to clear the entire dataloader cache, this function will be called if defined.
+d.`HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
+e. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
+f. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
 
 #### Benchmarks
 

@@ -21,17 +21,23 @@ type UserLoaderConfig struct {
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
 	ExpireAfter time.Duration
 
-	// TriggerAfterSet is called after a value is set in the cache
-	TriggerAfterSet func(key string, value *User)
+	// HookBeforeFetch is called right before a fetch is performed
+	HookBeforeFetch func(keys []string, loaderName string)
 
-	// TriggerAfterClear is called after a value is cleared from the cache
-	TriggerAfterClear func(key string)
+	// HookAfterFetch is called right after a fetch is performed
+	HookAfterFetch func(keys []string, loaderName string)
 
-	// TriggerAfterClearAll is called after all values are cleared from the cache
-	TriggerAfterClearAll func()
+	// HookAfterSet is called after a value is set in the cache
+	HookAfterSet func(key string, value *User)
 
-	// TriggerAfterExpired is called after a value is cleared in the cache due to expiration
-	TriggerAfterExpired func(key string)
+	// HookAfterClear is called after a value is cleared from the cache
+	HookAfterClear func(key string)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	HookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	HookAfterExpired func(key string)
 }
 
 // UserLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
@@ -57,10 +63,12 @@ func NewUserLoader(config UserLoaderConfig) *UserLoader {
 
 		expireAfter: config.ExpireAfter.Nanoseconds(),
 
-		triggerAfterSet:      config.TriggerAfterSet,
-		triggerAfterClear:    config.TriggerAfterClear,
-		triggerAfterClearAll: config.TriggerAfterClearAll,
-		triggerAfterExpired:  config.TriggerAfterExpired,
+		hookBeforeFetch:   config.HookBeforeFetch,
+		hookAfterFetch:    config.HookAfterFetch,
+		hookAfterSet:      config.HookAfterSet,
+		hookAfterClear:    config.HookAfterClear,
+		hookAfterClearAll: config.HookAfterClearAll,
+		hookAfterExpired:  config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -98,17 +106,23 @@ type UserLoader struct {
 	// mutex to prevent races
 	mu sync.Mutex
 
-	// triggerAfterSet is called after a value is primed in the cache
-	triggerAfterSet func(key string, value *User)
+	// HookBeforeFetch is called right before a fetch is performed
+	hookBeforeFetch func(keys []string, loaderName string)
 
-	// triggerAfterClear is called after a value is cleared from the cache
-	triggerAfterClear func(key string)
+	// HookAfterFetch is called right after a fetch is performed
+	hookAfterFetch func(keys []string, loaderName string)
 
-	// triggerAfterClearAll is called after all values are cleared from the cache
-	triggerAfterClearAll func()
+	// HookAfterSet is called after a value is primed in the cache
+	hookAfterSet func(key string, value *User)
 
-	// triggerAfterExpired is called after a value is cleared in the cache due to expiration
-	triggerAfterExpired func(key string)
+	// HookAfterClear is called after a value is cleared from the cache
+	hookAfterClear func(key string)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	hookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	hookAfterExpired func(key string)
 
 	// pool of batches
 	batchPool sync.Pool
@@ -140,7 +154,6 @@ func (l *UserLoader) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		b.keys = b.keys[:0]
 		l.batch = &userLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -176,8 +189,8 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 			}
 			// cache item has expired, clear from cache
 			delete(l.cacheExpire, key)
-			if l.triggerAfterExpired != nil {
-				go l.triggerAfterExpired(key)
+			if l.hookAfterExpired != nil {
+				l.hookAfterExpired(key)
 			}
 		}
 	} else {
@@ -341,8 +354,8 @@ func (l *UserLoader) Clear(key string) {
 		l.mu.Unlock()
 	}
 
-	if l.triggerAfterClear != nil {
-		go l.triggerAfterClear(key)
+	if l.hookAfterClear != nil {
+		l.hookAfterClear(key)
 	}
 }
 
@@ -363,8 +376,8 @@ func (l *UserLoader) ClearAll() {
 		l.mu.Unlock()
 	}
 
-	if l.triggerAfterClearAll != nil {
-		go l.triggerAfterClearAll()
+	if l.hookAfterClearAll != nil {
+		l.hookAfterClearAll()
 	}
 }
 
@@ -378,8 +391,8 @@ func (l *UserLoader) ClearExpired() {
 			if cacheItem != nil && tNow > cacheItem.Expires {
 				// value has expired
 				delete(l.cacheExpire, cacheKey)
-				if l.triggerAfterExpired != nil {
-					go l.triggerAfterExpired(cacheKey)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(cacheKey)
 				}
 			}
 		}
@@ -406,8 +419,8 @@ func (l *UserLoader) unsafeSet(key string, value *User) {
 		l.cacheExpire[key] = &UserLoaderCacheItem{Expires: time.Now().UnixNano() + l.expireAfter, Value: value}
 	}
 
-	if l.triggerAfterSet != nil {
-		go l.triggerAfterSet(key, value)
+	if l.hookAfterSet != nil {
+		l.hookAfterSet(key, value)
 	}
 }
 
@@ -455,6 +468,12 @@ func (b *userLoaderBatch) startTimer(l *UserLoader) {
 
 // end calls fetch and closes the done channel to unblock all thunks
 func (b *userLoaderBatch) end(l *UserLoader) {
+	if l.hookBeforeFetch != nil {
+		l.hookBeforeFetch(b.keys, "UserLoader")
+	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.hookAfterFetch != nil {
+		l.hookAfterFetch(b.keys, "UserLoader")
+	}
 	close(b.done)
 }

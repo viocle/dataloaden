@@ -23,17 +23,23 @@ type UserSliceLoaderConfig struct {
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
 	ExpireAfter time.Duration
 
-	// TriggerAfterSet is called after a value is set in the cache
-	TriggerAfterSet func(key int, value []example.User)
+	// HookBeforeFetch is called right before a fetch is performed
+	HookBeforeFetch func(keys []int, loaderName string)
 
-	// TriggerAfterClear is called after a value is cleared from the cache
-	TriggerAfterClear func(key int)
+	// HookAfterFetch is called right after a fetch is performed
+	HookAfterFetch func(keys []int, loaderName string)
 
-	// TriggerAfterClearAll is called after all values are cleared from the cache
-	TriggerAfterClearAll func()
+	// HookAfterSet is called after a value is set in the cache
+	HookAfterSet func(key int, value []example.User)
 
-	// TriggerAfterExpired is called after a value is cleared in the cache due to expiration
-	TriggerAfterExpired func(key int)
+	// HookAfterClear is called after a value is cleared from the cache
+	HookAfterClear func(key int)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	HookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	HookAfterExpired func(key int)
 }
 
 // UserSliceLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
@@ -59,10 +65,12 @@ func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 
 		expireAfter: config.ExpireAfter.Nanoseconds(),
 
-		triggerAfterSet:      config.TriggerAfterSet,
-		triggerAfterClear:    config.TriggerAfterClear,
-		triggerAfterClearAll: config.TriggerAfterClearAll,
-		triggerAfterExpired:  config.TriggerAfterExpired,
+		hookBeforeFetch:   config.HookBeforeFetch,
+		hookAfterFetch:    config.HookAfterFetch,
+		hookAfterSet:      config.HookAfterSet,
+		hookAfterClear:    config.HookAfterClear,
+		hookAfterClearAll: config.HookAfterClearAll,
+		hookAfterExpired:  config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -100,17 +108,23 @@ type UserSliceLoader struct {
 	// mutex to prevent races
 	mu sync.Mutex
 
-	// triggerAfterSet is called after a value is primed in the cache
-	triggerAfterSet func(key int, value []example.User)
+	// HookBeforeFetch is called right before a fetch is performed
+	hookBeforeFetch func(keys []int, loaderName string)
 
-	// triggerAfterClear is called after a value is cleared from the cache
-	triggerAfterClear func(key int)
+	// HookAfterFetch is called right after a fetch is performed
+	hookAfterFetch func(keys []int, loaderName string)
 
-	// triggerAfterClearAll is called after all values are cleared from the cache
-	triggerAfterClearAll func()
+	// HookAfterSet is called after a value is primed in the cache
+	hookAfterSet func(key int, value []example.User)
 
-	// triggerAfterExpired is called after a value is cleared in the cache due to expiration
-	triggerAfterExpired func(key int)
+	// HookAfterClear is called after a value is cleared from the cache
+	hookAfterClear func(key int)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	hookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	hookAfterExpired func(key int)
 
 	// pool of batches
 	batchPool sync.Pool
@@ -142,7 +156,6 @@ func (l *UserSliceLoader) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		b.keys = b.keys[:0]
 		l.batch = &userSliceLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -178,8 +191,8 @@ func (l *UserSliceLoader) LoadThunk(key int) ([]example.User, func() ([]example.
 			}
 			// cache item has expired, clear from cache
 			delete(l.cacheExpire, key)
-			if l.triggerAfterExpired != nil {
-				go l.triggerAfterExpired(key)
+			if l.hookAfterExpired != nil {
+				l.hookAfterExpired(key)
 			}
 		}
 	} else {
@@ -345,8 +358,8 @@ func (l *UserSliceLoader) Clear(key int) {
 		l.mu.Unlock()
 	}
 
-	if l.triggerAfterClear != nil {
-		go l.triggerAfterClear(key)
+	if l.hookAfterClear != nil {
+		l.hookAfterClear(key)
 	}
 }
 
@@ -367,8 +380,8 @@ func (l *UserSliceLoader) ClearAll() {
 		l.mu.Unlock()
 	}
 
-	if l.triggerAfterClearAll != nil {
-		go l.triggerAfterClearAll()
+	if l.hookAfterClearAll != nil {
+		l.hookAfterClearAll()
 	}
 }
 
@@ -382,8 +395,8 @@ func (l *UserSliceLoader) ClearExpired() {
 			if cacheItem != nil && tNow > cacheItem.Expires {
 				// value has expired
 				delete(l.cacheExpire, cacheKey)
-				if l.triggerAfterExpired != nil {
-					go l.triggerAfterExpired(cacheKey)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(cacheKey)
 				}
 			}
 		}
@@ -410,8 +423,8 @@ func (l *UserSliceLoader) unsafeSet(key int, value []example.User) {
 		l.cacheExpire[key] = &UserSliceLoaderCacheItem{Expires: time.Now().UnixNano() + l.expireAfter, Value: value}
 	}
 
-	if l.triggerAfterSet != nil {
-		go l.triggerAfterSet(key, value)
+	if l.hookAfterSet != nil {
+		l.hookAfterSet(key, value)
 	}
 }
 
@@ -459,6 +472,12 @@ func (b *userSliceLoaderBatch) startTimer(l *UserSliceLoader) {
 
 // end calls fetch and closes the done channel to unblock all thunks
 func (b *userSliceLoaderBatch) end(l *UserSliceLoader) {
+	if l.hookBeforeFetch != nil {
+		l.hookBeforeFetch(b.keys, "UserSliceLoader")
+	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.hookAfterFetch != nil {
+		l.hookAfterFetch(b.keys, "UserSliceLoader")
+	}
 	close(b.done)
 }

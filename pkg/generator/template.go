@@ -36,17 +36,23 @@ type {{.Name}}Config struct {
 	ExpireAfter time.Duration
 	{{ end }}
 
-	// TriggerAfterSet is called after a value is set in the cache
-	TriggerAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
+	// HookBeforeFetch is called right before a fetch is performed
+	HookBeforeFetch func(keys []{{.KeyType.String}}, loaderName string)
 
-	// TriggerAfterClear is called after a value is cleared from the cache
-	TriggerAfterClear func(key {{.KeyType.String}})
+	// HookAfterFetch is called right after a fetch is performed
+	HookAfterFetch func(keys []{{.KeyType.String}}, loaderName string)
 
-	// TriggerAfterClearAll is called after all values are cleared from the cache
-	TriggerAfterClearAll func()
+	// HookAfterSet is called after a value is set in the cache
+	HookAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
+
+	// HookAfterClear is called after a value is cleared from the cache
+	HookAfterClear func(key {{.KeyType.String}})
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	HookAfterClearAll func()
 	
-	// TriggerAfterExpired is called after a value is cleared in the cache due to expiration
-	TriggerAfterExpired func(key {{.KeyType.String}})
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	HookAfterExpired func(key {{.KeyType.String}})
 }
 
 {{ if not .DisableCacheExpiration }}
@@ -74,10 +80,12 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 		{{ if not .DisableCacheExpiration }}
 		expireAfter:config.ExpireAfter.Nanoseconds(),
 		{{ end }}
-		triggerAfterSet: config.TriggerAfterSet,
-		triggerAfterClear: config.TriggerAfterClear,
-		triggerAfterClearAll: config.TriggerAfterClearAll,
-		triggerAfterExpired:  config.TriggerAfterExpired,
+		hookBeforeFetch: config.HookBeforeFetch,
+		hookAfterFetch: config.HookAfterFetch,
+		hookAfterSet: config.HookAfterSet,
+		hookAfterClear: config.HookAfterClear,
+		hookAfterClearAll: config.HookAfterClearAll,
+		hookAfterExpired:  config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -117,17 +125,23 @@ type {{.Name}} struct {
 	// mutex to prevent races
 	mu sync.Mutex
 
-	// triggerAfterSet is called after a value is primed in the cache
-	triggerAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
+	// HookBeforeFetch is called right before a fetch is performed
+	hookBeforeFetch func(keys []{{.KeyType.String}}, loaderName string)
 
-	// triggerAfterClear is called after a value is cleared from the cache
-	triggerAfterClear func(key {{.KeyType.String}})
+	// HookAfterFetch is called right after a fetch is performed
+	hookAfterFetch func(keys []{{.KeyType.String}}, loaderName string)
 
-	// triggerAfterClearAll is called after all values are cleared from the cache
-	triggerAfterClearAll func()
+	// HookAfterSet is called after a value is primed in the cache
+	hookAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
+
+	// HookAfterClear is called after a value is cleared from the cache
+	hookAfterClear func(key {{.KeyType.String}})
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	hookAfterClearAll func()
 	
-	// triggerAfterExpired is called after a value is cleared in the cache due to expiration
-	triggerAfterExpired func(key {{.KeyType.String}})
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	hookAfterExpired func(key {{.KeyType.String}})
 
 	// pool of batches
 	batchPool sync.Pool
@@ -159,7 +173,6 @@ func (l *{{.Name}}) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		b.keys = b.keys[:0]
 		l.batch = &{{.Name|lcFirst}}Batch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -195,8 +208,8 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 			}
 			// cache item has expired, clear from cache
 			delete(l.cacheExpire, key)
-			if l.triggerAfterExpired != nil {
-				go l.triggerAfterExpired(key)
+			if l.hookAfterExpired != nil {
+				l.hookAfterExpired(key)
 			}
 		}
 	} else {
@@ -388,8 +401,8 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 		l.mu.Unlock()
 	}
 	{{ end }}
-	if l.triggerAfterClear != nil {
-		go l.triggerAfterClear(key)
+	if l.hookAfterClear != nil {
+		l.hookAfterClear(key)
 	}
 }
 
@@ -411,8 +424,8 @@ func (l *{{.Name}}) ClearAll() {
 		l.mu.Unlock()
 	}
 	{{ end }}
-	if l.triggerAfterClearAll != nil {
-		go l.triggerAfterClearAll()
+	if l.hookAfterClearAll != nil {
+		l.hookAfterClearAll()
 	}
 }
 
@@ -427,8 +440,8 @@ func (l *{{.Name}}) ClearExpired() {
 			if cacheItem != nil && tNow > cacheItem.Expires {
 				// value has expired
 				delete(l.cacheExpire, cacheKey)
-				if l.triggerAfterExpired != nil {
-					go l.triggerAfterExpired(cacheKey)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(cacheKey)
 				}
 			}
 		}
@@ -456,8 +469,8 @@ func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 		l.cacheExpire[key] = &{{.Name}}CacheItem{Expires: time.Now().UnixNano()+l.expireAfter, Value: value}
 	}
 	{{ end }}
-	if l.triggerAfterSet != nil {
-		go l.triggerAfterSet(key, value)
+	if l.hookAfterSet != nil {
+		l.hookAfterSet(key, value)
 	}
 }
 
@@ -505,7 +518,13 @@ func (b *{{.Name|lcFirst}}Batch) startTimer(l *{{.Name}}) {
 
 // end calls fetch and closes the done channel to unblock all thunks
 func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
+	if l.hookBeforeFetch != nil {
+		l.hookBeforeFetch(b.keys, "{{.Name}}")
+	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.hookAfterFetch != nil {
+		l.hookAfterFetch(b.keys, "{{.Name}}")
+	}
 	close(b.done)
 }
 `))

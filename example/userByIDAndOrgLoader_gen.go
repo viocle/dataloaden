@@ -18,17 +18,23 @@ type UserByIDAndOrgLoaderConfig struct {
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
 
-	// TriggerAfterSet is called after a value is set in the cache
-	TriggerAfterSet func(key UserByIDAndOrg, value *User)
+	// HookBeforeFetch is called right before a fetch is performed
+	HookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// TriggerAfterClear is called after a value is cleared from the cache
-	TriggerAfterClear func(key UserByIDAndOrg)
+	// HookAfterFetch is called right after a fetch is performed
+	HookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// TriggerAfterClearAll is called after all values are cleared from the cache
-	TriggerAfterClearAll func()
+	// HookAfterSet is called after a value is set in the cache
+	HookAfterSet func(key UserByIDAndOrg, value *User)
 
-	// TriggerAfterExpired is called after a value is cleared in the cache due to expiration
-	TriggerAfterExpired func(key UserByIDAndOrg)
+	// HookAfterClear is called after a value is cleared from the cache
+	HookAfterClear func(key UserByIDAndOrg)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	HookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	HookAfterExpired func(key UserByIDAndOrg)
 }
 
 // NewUserByIDAndOrgLoader creates a new UserByIDAndOrgLoader given a fetch, wait, and maxBatch
@@ -38,10 +44,12 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 		wait:     config.Wait,
 		maxBatch: config.MaxBatch,
 
-		triggerAfterSet:      config.TriggerAfterSet,
-		triggerAfterClear:    config.TriggerAfterClear,
-		triggerAfterClearAll: config.TriggerAfterClearAll,
-		triggerAfterExpired:  config.TriggerAfterExpired,
+		hookBeforeFetch:   config.HookBeforeFetch,
+		hookAfterFetch:    config.HookAfterFetch,
+		hookAfterSet:      config.HookAfterSet,
+		hookAfterClear:    config.HookAfterClear,
+		hookAfterClearAll: config.HookAfterClearAll,
+		hookAfterExpired:  config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -74,17 +82,23 @@ type UserByIDAndOrgLoader struct {
 	// mutex to prevent races
 	mu sync.Mutex
 
-	// triggerAfterSet is called after a value is primed in the cache
-	triggerAfterSet func(key UserByIDAndOrg, value *User)
+	// HookBeforeFetch is called right before a fetch is performed
+	hookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// triggerAfterClear is called after a value is cleared from the cache
-	triggerAfterClear func(key UserByIDAndOrg)
+	// HookAfterFetch is called right after a fetch is performed
+	hookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// triggerAfterClearAll is called after all values are cleared from the cache
-	triggerAfterClearAll func()
+	// HookAfterSet is called after a value is primed in the cache
+	hookAfterSet func(key UserByIDAndOrg, value *User)
 
-	// triggerAfterExpired is called after a value is cleared in the cache due to expiration
-	triggerAfterExpired func(key UserByIDAndOrg)
+	// HookAfterClear is called after a value is cleared from the cache
+	hookAfterClear func(key UserByIDAndOrg)
+
+	// HookAfterClearAll is called after all values are cleared from the cache
+	hookAfterClearAll func()
+
+	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	hookAfterExpired func(key UserByIDAndOrg)
 
 	// pool of batches
 	batchPool sync.Pool
@@ -116,7 +130,6 @@ func (l *UserByIDAndOrgLoader) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		b.keys = b.keys[:0]
 		l.batch = &userByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -273,8 +286,8 @@ func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 	delete(l.cache, key)
 	l.mu.Unlock()
 
-	if l.triggerAfterClear != nil {
-		go l.triggerAfterClear(key)
+	if l.hookAfterClear != nil {
+		l.hookAfterClear(key)
 	}
 }
 
@@ -285,8 +298,8 @@ func (l *UserByIDAndOrgLoader) ClearAll() {
 	l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
 	l.mu.Unlock()
 
-	if l.triggerAfterClearAll != nil {
-		go l.triggerAfterClearAll()
+	if l.hookAfterClearAll != nil {
+		l.hookAfterClearAll()
 	}
 }
 
@@ -298,8 +311,8 @@ func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
 	}
 	l.cache[key] = value
 
-	if l.triggerAfterSet != nil {
-		go l.triggerAfterSet(key, value)
+	if l.hookAfterSet != nil {
+		l.hookAfterSet(key, value)
 	}
 }
 
@@ -347,6 +360,12 @@ func (b *userByIDAndOrgLoaderBatch) startTimer(l *UserByIDAndOrgLoader) {
 
 // end calls fetch and closes the done channel to unblock all thunks
 func (b *userByIDAndOrgLoaderBatch) end(l *UserByIDAndOrgLoader) {
+	if l.hookBeforeFetch != nil {
+		l.hookBeforeFetch(b.keys, "UserByIDAndOrgLoader")
+	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.hookAfterFetch != nil {
+		l.hookAfterFetch(b.keys, "UserByIDAndOrgLoader")
+	}
 	close(b.done)
 }
