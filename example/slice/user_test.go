@@ -85,7 +85,7 @@ func TestUserSliceLoader(t *testing.T) {
 
 	// set loader cache expiration to 100ms to change to using cacheExpire in the background
 	// this should never be done in practice, but is done here to test the functionality
-	loader.expireAfter = time.Millisecond * 100
+	loader.expireAfter = (time.Millisecond * 100).Nanoseconds()
 
 	// prime user 1 to the cache
 	if !loader.Prime(1, []example.User{{ID: "1", Name: "user 1"}}) {
@@ -120,7 +120,7 @@ func TestUserSliceLoader(t *testing.T) {
 		t.Errorf("Expected 1 user in cacheExpire value, got %d", len(user.Value))
 	} else if user.Value[0].ID != "1" {
 		t.Errorf("Expected user 1 in cacheExpire value, got %s", user.Value[0].ID)
-	} else if !user.expired() {
+	} else if !user.expired(time.Now().UnixNano()) {
 		t.Errorf("Expected user 1 to be expired, got %v", user)
 	}
 

@@ -14,11 +14,22 @@ import (
 	"golang.org/x/tools/imports"
 )
 
+// Config is the configuration for the generator
+type Config struct {
+	FileNamePrefix         string
+	LoaderName             string
+	KeyType                string
+	ValueType              string
+	WorkingDirectory       string
+	DisableCacheExpiration bool
+}
+
 type templateData struct {
-	Package string
-	Name    string
-	KeyType *goType
-	ValType *goType
+	Package                string
+	Name                   string
+	KeyType                *goType
+	ValType                *goType
+	DisableCacheExpiration bool
 }
 
 type goType struct {
@@ -78,43 +89,38 @@ func parseType(str string) (*goType, error) {
 	return t, nil
 }
 
-// GenerateWithPrefix generates a dataloader file with the specified file name prefix
-func GenerateWithPrefix(fileNamePrefix, name string, keyType string, valueType string, wd string) error {
-	data, err := getData(name, keyType, valueType, wd)
+// Generate dataloader file without a file name prefix
+func Generate(config Config) error {
+	data, err := getData(config)
 	if err != nil {
 		return err
 	}
 
-	filename := fmt.Sprintf("%s%s_gen.go", fileNamePrefix, ToLowerCamel(data.Name))
+	filename := fmt.Sprintf("%s%s_gen.go", config.FileNamePrefix, ToLowerCamel(data.Name))
 
-	if err := writeTemplate(filepath.Join(wd, filename), data); err != nil {
+	if err := writeTemplate(filepath.Join(config.WorkingDirectory, filename), data); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// Generate dataloader file without a file name prefix
-func Generate(name string, keyType string, valueType string, wd string) error {
-	return GenerateWithPrefix("", name, keyType, valueType, wd)
-}
-
-func getData(name string, keyType string, valueType string, wd string) (templateData, error) {
+func getData(config Config) (templateData, error) {
 	var data templateData
-
-	genPkg := getPackage(wd)
+	data.DisableCacheExpiration = config.DisableCacheExpiration
+	genPkg := getPackage(config.WorkingDirectory)
 	if genPkg == nil {
-		return templateData{}, fmt.Errorf("unable to find package info for " + wd)
+		return templateData{}, fmt.Errorf("unable to find package info for " + config.WorkingDirectory)
 	}
 
 	var err error
-	data.Name = name
+	data.Name = config.LoaderName
 	data.Package = genPkg.Name
-	data.KeyType, err = parseType(keyType)
+	data.KeyType, err = parseType(config.KeyType)
 	if err != nil {
 		return templateData{}, fmt.Errorf("key type: %s", err.Error())
 	}
-	data.ValType, err = parseType(valueType)
+	data.ValType, err = parseType(config.ValueType)
 	if err != nil {
 		return templateData{}, fmt.Errorf("key type: %s", err.Error())
 	}
@@ -166,4 +172,21 @@ func lcFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToLower(r[0])
 	return string(r)
+}
+
+func LoadThunkMissReturnType(t string) string {
+	if t == "interface{}" || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "[]") {
+		// nullable type
+		return "nil"
+	}
+	switch t {
+	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128", "byte":
+		return "0"
+	case "string":
+		return `""`
+	case "bool":
+		return "false"
+	default:
+		return t + "{}"
+	}
 }

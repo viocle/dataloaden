@@ -15,10 +15,10 @@ func TestUserLoader(t *testing.T) {
 	var fetches [][]string
 	var mu sync.Mutex
 
-	dl := &UserLoader{
-		wait:     10 * time.Millisecond,
-		maxBatch: 5,
-		fetch: func(keys []string) ([]*User, []error) {
+	dl := NewUserLoader(UserLoaderConfig{
+		Wait:     10 * time.Millisecond,
+		MaxBatch: 5,
+		Fetch: func(keys []string) ([]*User, []error) {
 			mu.Lock()
 			fetches = append(fetches, keys)
 			mu.Unlock()
@@ -35,14 +35,14 @@ func TestUserLoader(t *testing.T) {
 			}
 			return users, errors
 		},
-	}
+	})
 
 	t.Run("fetch concurrent data", func(t *testing.T) {
 		t.Run("load user successfully", func(t *testing.T) {
 			t.Parallel()
 			u, err := dl.Load("U1")
 			require.NoError(t, err)
-			require.Equal(t, u.ID, "U1")
+			require.Equal(t, "U1", u.ID)
 		})
 
 		t.Run("load failed user", func(t *testing.T) {
@@ -55,24 +55,32 @@ func TestUserLoader(t *testing.T) {
 		t.Run("load many users", func(t *testing.T) {
 			t.Parallel()
 			u, err := dl.LoadAll([]string{"U2", "E2", "E3", "U4"})
-			require.Equal(t, u[0].Name, "user U2")
-			require.Equal(t, u[3].Name, "user U4")
+			require.Equal(t, "user U2", u[0].Name)
+			require.Equal(t, "user U4", u[3].Name)
 			require.Error(t, err[1])
 			require.Error(t, err[2])
 		})
 
 		t.Run("load thunk", func(t *testing.T) {
 			t.Parallel()
-			thunk1 := dl.LoadThunk("U5")
-			thunk2 := dl.LoadThunk("E5")
+			v1, thunk1 := dl.LoadThunk("U5")
+			v2, thunk2 := dl.LoadThunk("E5")
 
-			u1, err1 := thunk1()
-			require.NoError(t, err1)
-			require.Equal(t, "user U5", u1.Name)
+			if thunk1 != nil {
+				u1, err1 := thunk1()
+				require.NoError(t, err1)
+				require.Equal(t, "user U5", u1.Name)
+			} else {
+				require.Equal(t, "user U5", v1.Name)
+			}
 
-			u2, err2 := thunk2()
-			require.Error(t, err2)
-			require.Nil(t, u2)
+			if thunk2 != nil {
+				u2, err2 := thunk2()
+				require.Error(t, err2)
+				require.Nil(t, u2)
+			} else {
+				require.Nil(t, v2)
+			}
 		})
 	})
 
@@ -91,7 +99,7 @@ func TestUserLoader(t *testing.T) {
 			t.Parallel()
 			u, err := dl.Load("U1")
 			require.NoError(t, err)
-			require.Equal(t, u.ID, "U1")
+			require.Equal(t, "U1", u.ID)
 		})
 
 		t.Run("load many users", func(t *testing.T) {
@@ -99,8 +107,8 @@ func TestUserLoader(t *testing.T) {
 			u, err := dl.LoadAll([]string{"U2", "U4"})
 			require.NoError(t, err[0])
 			require.NoError(t, err[1])
-			require.Equal(t, u[0].Name, "user U2")
-			require.Equal(t, u[1].Name, "user U4")
+			require.Equal(t, "user U2", u[0].Name)
+			require.Equal(t, "user U4", u[1].Name)
 		})
 	})
 
@@ -122,11 +130,11 @@ func TestUserLoader(t *testing.T) {
 		t.Run("load all", func(t *testing.T) {
 			t.Parallel()
 			u, err := dl.LoadAll([]string{"U1", "U4", "E1", "U9", "U5"})
-			require.Equal(t, u[0].ID, "U1")
-			require.Equal(t, u[1].ID, "U4")
+			require.Equal(t, "U1", u[0].ID)
+			require.Equal(t, "U4", u[1].ID)
 			require.Error(t, err[2])
-			require.Equal(t, u[3].ID, "U9")
-			require.Equal(t, u[4].ID, "U5")
+			require.Equal(t, "U9", u[3].ID)
+			require.Equal(t, "U5", u[4].ID)
 		})
 	})
 

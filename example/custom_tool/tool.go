@@ -40,7 +40,7 @@ func main() {
 	}
 	fmt.Println(p)
 
-	if err := generator.GenerateWithPrefix("dataLoader-", *loaderName, *dataType, *returnType, wd); err != nil {
+	if err := generator.Generate(generator.Config{FileNamePrefix: "dataLoader-", LoaderName: *loaderName, KeyType: *dataType, ValueType: *returnType, WorkingDirectory: wd}); err != nil {
 		fmt.Fprintln(os.Stderr, "Generate Error:", err.Error())
 		os.Exit(4)
 	}

@@ -1,4 +1,5 @@
 //go:generate go run github.com/viocle/dataloaden UserLoader string *github.com/viocle/dataloaden/example.User
+//go:generate go run github.com/viocle/dataloaden UserByIDAndOrgLoader UserByIDAndOrg *github.com/viocle/dataloaden/example.User true
 
 package example
 
@@ -8,8 +9,14 @@ import (
 
 // User is some kind of database backed model
 type User struct {
-	ID   string
-	Name string
+	ID    string
+	OrgID string
+	Name  string
+}
+
+type UserByIDAndOrg struct {
+	ID    string
+	OrgID string
 }
 
 // NewLoader will collect user requests for 2 milliseconds and send them as a single batch to the fetch func

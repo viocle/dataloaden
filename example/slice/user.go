@@ -11,10 +11,10 @@ import (
 
 // NewLoader returns a new *UserSliceLoader
 func NewLoader() *UserSliceLoader {
-	return &UserSliceLoader{
-		wait:     2 * time.Millisecond,
-		maxBatch: 100,
-		fetch: func(keys []int) ([][]example.User, []error) {
+	return NewUserSliceLoader(UserSliceLoaderConfig{
+		Wait:     2 * time.Millisecond,
+		MaxBatch: 100,
+		Fetch: func(keys []int) ([][]example.User, []error) {
 			users := make([][]example.User, len(keys))
 			errors := make([]error, len(keys))
 
@@ -23,5 +23,5 @@ func NewLoader() *UserSliceLoader {
 			}
 			return users, errors
 		},
-	}
+	})
 }

@@ -20,29 +20,55 @@ type UserLoaderConfig struct {
 
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
 	ExpireAfter time.Duration
+
+	// TriggerAfterSet is called after a value is set in the cache
+	TriggerAfterSet func(key string, value *User)
+
+	// TriggerAfterClear is called after a value is cleared from the cache
+	TriggerAfterClear func(key string)
+
+	// TriggerAfterClearAll is called after all values are cleared from the cache
+	TriggerAfterClearAll func()
+
+	// TriggerAfterExpired is called after a value is cleared in the cache due to expiration
+	TriggerAfterExpired func(key string)
 }
 
 // UserLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
 type UserLoaderCacheItem struct {
 	// Expires contains the time this CacheItem expires
-	Expires time.Time
+	Expires int64
 
 	// Value contains the cached *User
 	Value *User
 }
 
-func (c *UserLoaderCacheItem) expired() bool {
-	return c.Expires.Before(time.Now())
+// expired returns true if the cache item has expired
+func (c *UserLoaderCacheItem) expired(now int64) bool {
+	return c.Expires < now
 }
 
 // NewUserLoader creates a new UserLoader given a fetch, wait, and maxBatch
 func NewUserLoader(config UserLoaderConfig) *UserLoader {
-	return &UserLoader{
-		fetch:       config.Fetch,
-		wait:        config.Wait,
-		maxBatch:    config.MaxBatch,
-		expireAfter: config.ExpireAfter,
+	l := &UserLoader{
+		fetch:    config.Fetch,
+		wait:     config.Wait,
+		maxBatch: config.MaxBatch,
+
+		expireAfter: config.ExpireAfter.Nanoseconds(),
+
+		triggerAfterSet:      config.TriggerAfterSet,
+		triggerAfterClear:    config.TriggerAfterClear,
+		triggerAfterClearAll: config.TriggerAfterClearAll,
+		triggerAfterExpired:  config.TriggerAfterExpired,
 	}
+	l.batchPool = sync.Pool{
+		New: func() interface{} {
+			return l.createNewBatch()
+		},
+	}
+	l.unsafeBatchSet()
+	return l
 }
 
 // UserLoader batches and caches requests
@@ -51,8 +77,10 @@ type UserLoader struct {
 	fetch func(keys []string) ([]*User, []error)
 
 	// lazily created cache
+
 	cacheExpire map[string]*UserLoaderCacheItem
-	cache       map[string]*User
+
+	cache map[string]*User
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
@@ -64,61 +92,104 @@ type UserLoader struct {
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
 
-	// this will determine if cache expiration will be used
-	expireAfter time.Duration
+	// the amount of nanoseconds a cache item should remain valid. This will determine if cache expiration will be used, 0 = no expiration
+	expireAfter int64
 
 	// mutex to prevent races
 	mu sync.Mutex
+
+	// triggerAfterSet is called after a value is primed in the cache
+	triggerAfterSet func(key string, value *User)
+
+	// triggerAfterClear is called after a value is cleared from the cache
+	triggerAfterClear func(key string)
+
+	// triggerAfterClearAll is called after all values are cleared from the cache
+	triggerAfterClearAll func()
+
+	// triggerAfterExpired is called after a value is cleared in the cache due to expiration
+	triggerAfterExpired func(key string)
+
+	// pool of batches
+	batchPool sync.Pool
 }
 
 type userLoaderBatch struct {
+	now     int64
 	done    chan struct{}
+	keysMap map[string]int
 	keys    []string
 	data    []*User
-	error   []error
+	errors  []error
 	closing bool
 }
 
 // Load a User by key, batching and caching will be applied automatically
 func (l *UserLoader) Load(key string) (*User, error) {
-	return l.LoadThunk(key)()
+	v, f := l.LoadThunk(key)
+	if f != nil {
+		return f()
+	}
+	return v, nil
+}
+
+// unsafeBatchSet creates a new batch if one does not exist, otherwise it will reuse the existing batch
+func (l *UserLoader) unsafeBatchSet() {
+	if l.batch == nil {
+		b := l.batchPool.Get().(*userLoaderBatch)
+		// reset
+		clear(b.keysMap)
+		clear(b.keys)
+		b.keys = b.keys[:0]
+		l.batch = &userLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
+	} else if l.batch.now == 0 {
+		// have a batch but first use, set the start time
+		l.batch.now = time.Now().UnixNano()
+	}
+}
+
+// createNewBatch creates a new batch
+func (l *UserLoader) createNewBatch() *userLoaderBatch {
+	return &userLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[string]int, l.maxBatch), keys: make([]string, 0, l.maxBatch), data: nil, errors: nil}
 }
 
 // LoadThunk returns a function that when called will block waiting for a User.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserLoader) LoadThunk(key string) func() (*User, error) {
+func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 	l.mu.Lock()
-	if l.expireAfter <= 0 {
+
+	if l.expireAfter <= 0 && len(l.cache) > 0 {
 		// not using cache expiration
 		if it, ok := l.cache[key]; ok {
 			l.mu.Unlock()
-			return func() (*User, error) {
-				return it, nil
+			return it, nil
+		}
+		l.unsafeBatchSet()
+	} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
+		// using cache expiration
+		l.unsafeBatchSet()
+		if it, ok := l.cacheExpire[key]; ok {
+			if it != nil && !it.expired(l.batch.now) {
+				l.mu.Unlock()
+				return it.Value, nil
+			}
+			// cache item has expired, clear from cache
+			delete(l.cacheExpire, key)
+			if l.triggerAfterExpired != nil {
+				go l.triggerAfterExpired(key)
 			}
 		}
 	} else {
-		// using cache expiration
-		if it, ok := l.cacheExpire[key]; ok {
-			l.mu.Unlock()
-			if it != nil && !it.expired() {
-				return func() (*User, error) {
-					return it.Value, nil
-				}
-			}
-			// cache item has expired, clear from cache and re-lock
-			l.Clear(key)
-			l.mu.Lock()
-		}
+		// no cache
+		l.unsafeBatchSet()
 	}
-	if l.batch == nil {
-		l.batch = &userLoaderBatch{done: make(chan struct{})}
-	}
+
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
 
-	return func() (*User, error) {
+	return nil, func() (*User, error) {
 		<-batch.done
 
 		var data *User
@@ -128,10 +199,10 @@ func (l *UserLoader) LoadThunk(key string) func() (*User, error) {
 
 		var err error
 		// its convenient to be able to return a single error for everything
-		if len(batch.error) == 1 {
-			err = batch.error[0]
-		} else if batch.error != nil {
-			err = batch.error[pos]
+		if len(batch.errors) == 1 {
+			err = batch.errors[0]
+		} else if batch.errors != nil {
+			err = batch.errors[pos]
 		}
 
 		if err == nil {
@@ -147,17 +218,21 @@ func (l *UserLoader) LoadThunk(key string) func() (*User, error) {
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
 // sub batches depending on how the loader is configured
 func (l *UserLoader) LoadAll(keys []string) ([]*User, []error) {
-	results := make([]func() (*User, error), len(keys))
+	users := make([]*User, len(keys))
+	thunks := make(map[int]func() (*User, error), len(keys))
+	errors := make([]error, len(keys))
 
 	for i, key := range keys {
-		results[i] = l.LoadThunk(key)
+		if v, thunk := l.LoadThunk(key); thunk != nil {
+			thunks[i] = thunk
+		} else {
+			users[i] = v
+		}
 	}
-
-	users := make([]*User, len(keys))
-	errors := make([]error, len(keys))
-	for i, thunk := range results {
+	for i, thunk := range thunks {
 		users[i], errors[i] = thunk()
 	}
+
 	return users, errors
 }
 
@@ -165,14 +240,18 @@ func (l *UserLoader) LoadAll(keys []string) ([]*User, []error) {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *UserLoader) LoadAllThunk(keys []string) func() ([]*User, []error) {
-	results := make([]func() (*User, error), len(keys))
+	thunks := make(map[int]func() (*User, error), len(keys))
+	users := make([]*User, len(keys))
 	for i, key := range keys {
-		results[i] = l.LoadThunk(key)
+		if v, thunk := l.LoadThunk(key); thunk != nil {
+			thunks[i] = thunk
+		} else {
+			users[i] = v
+		}
 	}
 	return func() ([]*User, []error) {
-		users := make([]*User, len(keys))
 		errors := make([]error, len(keys))
-		for i, thunk := range results {
+		for i, thunk := range thunks {
 			users[i], errors[i] = thunk()
 		}
 		return users, errors
@@ -182,8 +261,10 @@ func (l *UserLoader) LoadAllThunk(keys []string) func() ([]*User, []error) {
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *UserLoader) unsafePrime(key string, value *User, forceReplace bool) bool {
 	var found bool
+
 	if l.expireAfter <= 0 {
 		// not using cache expiration
+
 		if _, found = l.cache[key]; found && forceReplace {
 			delete(l.cache, key)
 		}
@@ -193,6 +274,7 @@ func (l *UserLoader) unsafePrime(key string, value *User, forceReplace bool) boo
 			cpy := *value
 			l.unsafeSet(key, &cpy)
 		}
+
 	} else {
 		// using cache expiration
 		if _, found = l.cacheExpire[key]; found && forceReplace {
@@ -205,6 +287,7 @@ func (l *UserLoader) unsafePrime(key string, value *User, forceReplace bool) boo
 			l.unsafeSet(key, &cpy)
 		}
 	}
+
 	return !found || forceReplace
 }
 
@@ -243,31 +326,45 @@ func (l *UserLoader) ForcePrime(key string, value *User) {
 
 // Clear the value at key from the cache, if it exists
 func (l *UserLoader) Clear(key string) {
+
 	if l.expireAfter <= 0 {
 		// not using cache expiration
+
 		l.mu.Lock()
 		delete(l.cache, key)
 		l.mu.Unlock()
+
 	} else {
 		// using cache expiration
 		l.mu.Lock()
 		delete(l.cacheExpire, key)
 		l.mu.Unlock()
 	}
+
+	if l.triggerAfterClear != nil {
+		go l.triggerAfterClear(key)
+	}
 }
 
 // ClearAll clears all values from the cache
 func (l *UserLoader) ClearAll() {
+
 	if l.expireAfter <= 0 {
 		// not using cache expiration
+
 		l.mu.Lock()
-		l.cache = make(map[string]*User, 1)
+		l.cache = make(map[string]*User, l.maxBatch)
 		l.mu.Unlock()
+
 	} else {
 		// using cache expiration
 		l.mu.Lock()
-		l.cacheExpire = make(map[string]*UserLoaderCacheItem, 1)
+		l.cacheExpire = make(map[string]*UserLoaderCacheItem, l.maxBatch)
 		l.mu.Unlock()
+	}
+
+	if l.triggerAfterClearAll != nil {
+		go l.triggerAfterClearAll()
 	}
 }
 
@@ -275,44 +372,54 @@ func (l *UserLoader) ClearAll() {
 func (l *UserLoader) ClearExpired() {
 	if l.expireAfter > 0 {
 		// using cache expiration
-		tNow := time.Now()
+		tNow := time.Now().UnixNano()
 		l.mu.Lock()
 		for cacheKey, cacheItem := range l.cacheExpire {
-			if cacheItem != nil && !tNow.Before(cacheItem.Expires) {
+			if cacheItem != nil && tNow > cacheItem.Expires {
 				// value has expired
 				delete(l.cacheExpire, cacheKey)
+				if l.triggerAfterExpired != nil {
+					go l.triggerAfterExpired(cacheKey)
+				}
 			}
 		}
 		l.mu.Unlock()
 	}
 }
 
+// unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
 func (l *UserLoader) unsafeSet(key string, value *User) {
+
 	if l.expireAfter <= 0 {
 		// not using cache expiration
+
 		if l.cache == nil {
-			l.cache = make(map[string]*User, 1)
+			l.cache = make(map[string]*User, l.maxBatch)
 		}
 		l.cache[key] = value
+
 	} else {
 		// using cache expiration
 		if l.cacheExpire == nil {
-			l.cacheExpire = make(map[string]*UserLoaderCacheItem, 1)
+			l.cacheExpire = make(map[string]*UserLoaderCacheItem, l.maxBatch)
 		}
-		l.cacheExpire[key] = &UserLoaderCacheItem{Expires: time.Now().Add(l.expireAfter), Value: value}
+		l.cacheExpire[key] = &UserLoaderCacheItem{Expires: time.Now().UnixNano() + l.expireAfter, Value: value}
+	}
+
+	if l.triggerAfterSet != nil {
+		go l.triggerAfterSet(key, value)
 	}
 }
 
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
 func (b *userLoaderBatch) keyIndex(l *UserLoader, key string) int {
-	for i, existingKey := range b.keys {
-		if key == existingKey {
-			return i
-		}
+	if i, ok := b.keysMap[key]; ok {
+		return i
 	}
 
-	pos := len(b.keys)
+	pos := len(b.keysMap)
+	b.keysMap[key] = pos
 	b.keys = append(b.keys, key)
 	if pos == 0 {
 		go b.startTimer(l)
@@ -329,6 +436,7 @@ func (b *userLoaderBatch) keyIndex(l *UserLoader, key string) int {
 	return pos
 }
 
+// startTimer will wait the desired wait time before sending the batch unless another batch limit had been reached
 func (b *userLoaderBatch) startTimer(l *UserLoader) {
 	time.Sleep(l.wait)
 	l.mu.Lock()
@@ -345,7 +453,8 @@ func (b *userLoaderBatch) startTimer(l *UserLoader) {
 	b.end(l)
 }
 
+// end calls fetch and closes the done channel to unblock all thunks
 func (b *userLoaderBatch) end(l *UserLoader) {
-	b.data, b.error = l.fetch(b.keys)
+	b.data, b.errors = l.fetch(b.keys)
 	close(b.done)
 }
