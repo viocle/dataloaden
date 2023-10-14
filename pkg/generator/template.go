@@ -34,7 +34,25 @@ type {{.Name}}Config struct {
 	{{ if not .DisableCacheExpiration }}
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
 	ExpireAfter time.Duration
+
 	{{ end }}
+	// HookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
+	// This replaces the use of the internal cache. 
+	// If the key is found in the external cache, the value should be returned along with true. 
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	// Both HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll should be set if using an external cache.
+	HookExternalCacheGet func(key {{.KeyType.String}}) ({{.ValType.String}}, bool)
+
+	// HookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheSet func(key {{.KeyType.String}}, value {{.ValType.String}}) error
+
+	// HookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheDelete func(key {{.KeyType.String}}) error
+
+	// HookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	HookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
 	HookBeforeFetch func(keys []{{.KeyType.String}}, loaderName string)
@@ -76,10 +94,12 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 	l := &{{.Name}}{
 		fetch: config.Fetch,
 		wait: config.Wait,
-		maxBatch: config.MaxBatch,
-		{{ if not .DisableCacheExpiration }}
-		expireAfter:config.ExpireAfter.Nanoseconds(),
-		{{ end }}
+		maxBatch: config.MaxBatch,{{ if not .DisableCacheExpiration }}
+		expireAfter:config.ExpireAfter.Nanoseconds(),{{ end }}
+		hookExternalCacheGet: config.HookExternalCacheGet,
+		hookExternalCacheSet: config.HookExternalCacheSet,
+		hookExternalCacheDelete: config.HookExternalCacheDelete,
+		hookExternalCacheClearAll: config.HookExternalCacheClearAll,
 		hookBeforeFetch: config.HookBeforeFetch,
 		hookAfterFetch: config.HookAfterFetch,
 		hookAfterSet: config.HookAfterSet,
@@ -124,6 +144,22 @@ type {{.Name}} struct {
 	{{ end }}
 	// mutex to prevent races
 	mu sync.Mutex
+
+	// hookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook. 
+	// If the key is found in the external cache, the value should be returned along with true. 
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	hookExternalCacheGet func(key {{.KeyType.String}}) ({{.ValType.String}}, bool)
+	
+	// hookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheSet func(key {{.KeyType.String}}, value {{.ValType.String}}) error
+
+	// hookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheDelete func(key {{.KeyType.String}}) error
+
+	// hookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	hookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
 	hookBeforeFetch func(keys []{{.KeyType.String}}, loaderName string)
@@ -189,33 +225,41 @@ func (l *{{.Name}}) createNewBatch() *{{.Name|lcFirst}}Batch {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
-	l.mu.Lock()
-	{{ if not .DisableCacheExpiration }}
-	if l.expireAfter <= 0 && len(l.cache) > 0 {
-		// not using cache expiration
-		if it, ok := l.cache[key]; ok {
-			l.mu.Unlock()
-			return it, nil
+	if l.hookExternalCacheGet != nil {
+		if v, ok := l.hookExternalCacheGet(key); ok {
+			return v, nil
 		}
+		// not found in external cache, continue
+		l.mu.Lock()
 		l.unsafeBatchSet()
-	} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
-		// using cache expiration
-		l.unsafeBatchSet()
-		if it, ok := l.cacheExpire[key]; ok {
-			if it != nil && !it.expired(l.batch.now) {
-				l.mu.Unlock()
-				return it.Value, nil
-			}
-			// cache item has expired, clear from cache
-			delete(l.cacheExpire, key)
-			if l.hookAfterExpired != nil {
-				l.hookAfterExpired(key)
-			}
-		}
 	} else {
-		// no cache
-		l.unsafeBatchSet()
-	}
+		l.mu.Lock()
+		{{ if not .DisableCacheExpiration }}
+		if l.expireAfter <= 0 && len(l.cache) > 0 {
+			// not using cache expiration
+			if it, ok := l.cache[key]; ok {
+				l.mu.Unlock()
+				return it, nil
+			}
+			l.unsafeBatchSet()
+		} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
+			// using cache expiration
+			l.unsafeBatchSet()
+			if it, ok := l.cacheExpire[key]; ok {
+				if it != nil && !it.expired(l.batch.now) {
+					l.mu.Unlock()
+					return it.Value, nil
+				}
+				// cache item has expired, clear from cache
+				delete(l.cacheExpire, key)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(key)
+				}
+			}
+		} else {
+			// no cache
+			l.unsafeBatchSet()
+		}
 	{{ else }}
 	if len(l.cache) > 0 {
 		if it, ok := l.cache[key]; ok {
@@ -225,6 +269,7 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 	}
 	l.unsafeBatchSet()
 	{{ end }}
+	}
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -300,6 +345,32 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}, forceReplace bool) bool {
+	if l.hookExternalCacheSet != nil {
+		{{- if .ValType.IsPtr }}
+		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+		// and end up with the whole cache pointing to the same value.
+		cpy := *value
+		if err := l.hookExternalCacheSet(key, &cpy); err != nil {
+			return false
+		}
+		{{- else if .ValType.IsSlice }}
+		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+		// and end up with the whole cache pointing to the same value.
+		cpy := make({{.ValType.String}}, len(value))
+		copy(cpy, value)
+		if err := l.hookExternalCacheSet(key, cpy); err != nil {
+			return false
+		}
+		{{- else }}
+		if err := l.hookExternalCacheSet(key, value); err != nil {
+			return false
+		}
+		{{- end }}
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return true
+	}
 	var found bool
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
@@ -386,6 +457,13 @@ func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
 
 // Clear the value at key from the cache, if it exists
 func (l *{{.Name}}) Clear(key {{.KeyType}}) {
+	if l.hookExternalCacheDelete != nil {
+		l.hookExternalCacheDelete(key)
+		if l.hookAfterClear != nil {
+			l.hookAfterClear(key)
+		}
+		return 
+	}
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
 		// not using cache expiration
@@ -408,6 +486,13 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 
 // ClearAll clears all values from the cache
 func (l *{{.Name}}) ClearAll() {
+	if l.hookExternalCacheClearAll != nil {
+		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAll != nil {
+			l.hookAfterClearAll()
+		}
+		return 
+	}
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
 		// not using cache expiration
@@ -452,6 +537,13 @@ func (l *{{.Name}}) ClearExpired() {
 {{ end }}
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
+	if l.hookExternalCacheSet != nil {
+		l.hookExternalCacheSet(key, value)
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return
+	}
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
 		// not using cache expiration

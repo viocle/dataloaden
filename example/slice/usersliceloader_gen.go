@@ -23,6 +23,24 @@ type UserSliceLoaderConfig struct {
 	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
 	ExpireAfter time.Duration
 
+	// HookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	// If the key is found in the external cache, the value should be returned along with true.
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	// Both HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll should be set if using an external cache.
+	HookExternalCacheGet func(key int) ([]example.User, bool)
+
+	// HookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheSet func(key int, value []example.User) error
+
+	// HookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheDelete func(key int) error
+
+	// HookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	HookExternalCacheClearAll func() error
+
 	// HookBeforeFetch is called right before a fetch is performed
 	HookBeforeFetch func(keys []int, loaderName string)
 
@@ -59,18 +77,20 @@ func (c *UserSliceLoaderCacheItem) expired(now int64) bool {
 // NewUserSliceLoader creates a new UserSliceLoader given a fetch, wait, and maxBatch
 func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 	l := &UserSliceLoader{
-		fetch:    config.Fetch,
-		wait:     config.Wait,
-		maxBatch: config.MaxBatch,
-
-		expireAfter: config.ExpireAfter.Nanoseconds(),
-
-		hookBeforeFetch:   config.HookBeforeFetch,
-		hookAfterFetch:    config.HookAfterFetch,
-		hookAfterSet:      config.HookAfterSet,
-		hookAfterClear:    config.HookAfterClear,
-		hookAfterClearAll: config.HookAfterClearAll,
-		hookAfterExpired:  config.HookAfterExpired,
+		fetch:                     config.Fetch,
+		wait:                      config.Wait,
+		maxBatch:                  config.MaxBatch,
+		expireAfter:               config.ExpireAfter.Nanoseconds(),
+		hookExternalCacheGet:      config.HookExternalCacheGet,
+		hookExternalCacheSet:      config.HookExternalCacheSet,
+		hookExternalCacheDelete:   config.HookExternalCacheDelete,
+		hookExternalCacheClearAll: config.HookExternalCacheClearAll,
+		hookBeforeFetch:           config.HookBeforeFetch,
+		hookAfterFetch:            config.HookAfterFetch,
+		hookAfterSet:              config.HookAfterSet,
+		hookAfterClear:            config.HookAfterClear,
+		hookAfterClearAll:         config.HookAfterClearAll,
+		hookAfterExpired:          config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -107,6 +127,22 @@ type UserSliceLoader struct {
 
 	// mutex to prevent races
 	mu sync.Mutex
+
+	// hookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
+	// If the key is found in the external cache, the value should be returned along with true.
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	hookExternalCacheGet func(key int) ([]example.User, bool)
+
+	// hookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheSet func(key int, value []example.User) error
+
+	// hookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheDelete func(key int) error
+
+	// hookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	hookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
 	hookBeforeFetch func(keys []int, loaderName string)
@@ -172,34 +208,43 @@ func (l *UserSliceLoader) createNewBatch() *userSliceLoaderBatch {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *UserSliceLoader) LoadThunk(key int) ([]example.User, func() ([]example.User, error)) {
-	l.mu.Lock()
-
-	if l.expireAfter <= 0 && len(l.cache) > 0 {
-		// not using cache expiration
-		if it, ok := l.cache[key]; ok {
-			l.mu.Unlock()
-			return it, nil
+	if l.hookExternalCacheGet != nil {
+		if v, ok := l.hookExternalCacheGet(key); ok {
+			return v, nil
 		}
+		// not found in external cache, continue
+		l.mu.Lock()
 		l.unsafeBatchSet()
-	} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
-		// using cache expiration
-		l.unsafeBatchSet()
-		if it, ok := l.cacheExpire[key]; ok {
-			if it != nil && !it.expired(l.batch.now) {
-				l.mu.Unlock()
-				return it.Value, nil
-			}
-			// cache item has expired, clear from cache
-			delete(l.cacheExpire, key)
-			if l.hookAfterExpired != nil {
-				l.hookAfterExpired(key)
-			}
-		}
 	} else {
-		// no cache
-		l.unsafeBatchSet()
-	}
+		l.mu.Lock()
 
+		if l.expireAfter <= 0 && len(l.cache) > 0 {
+			// not using cache expiration
+			if it, ok := l.cache[key]; ok {
+				l.mu.Unlock()
+				return it, nil
+			}
+			l.unsafeBatchSet()
+		} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
+			// using cache expiration
+			l.unsafeBatchSet()
+			if it, ok := l.cacheExpire[key]; ok {
+				if it != nil && !it.expired(l.batch.now) {
+					l.mu.Unlock()
+					return it.Value, nil
+				}
+				// cache item has expired, clear from cache
+				delete(l.cacheExpire, key)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(key)
+				}
+			}
+		} else {
+			// no cache
+			l.unsafeBatchSet()
+		}
+
+	}
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -275,6 +320,19 @@ func (l *UserSliceLoader) LoadAllThunk(keys []int) func() ([][]example.User, []e
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *UserSliceLoader) unsafePrime(key int, value []example.User, forceReplace bool) bool {
+	if l.hookExternalCacheSet != nil {
+		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+		// and end up with the whole cache pointing to the same value.
+		cpy := make([]example.User, len(value))
+		copy(cpy, value)
+		if err := l.hookExternalCacheSet(key, cpy); err != nil {
+			return false
+		}
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return true
+	}
 	var found bool
 
 	if l.expireAfter <= 0 {
@@ -343,6 +401,13 @@ func (l *UserSliceLoader) ForcePrime(key int, value []example.User) {
 
 // Clear the value at key from the cache, if it exists
 func (l *UserSliceLoader) Clear(key int) {
+	if l.hookExternalCacheDelete != nil {
+		l.hookExternalCacheDelete(key)
+		if l.hookAfterClear != nil {
+			l.hookAfterClear(key)
+		}
+		return
+	}
 
 	if l.expireAfter <= 0 {
 		// not using cache expiration
@@ -365,6 +430,13 @@ func (l *UserSliceLoader) Clear(key int) {
 
 // ClearAll clears all values from the cache
 func (l *UserSliceLoader) ClearAll() {
+	if l.hookExternalCacheClearAll != nil {
+		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAll != nil {
+			l.hookAfterClearAll()
+		}
+		return
+	}
 
 	if l.expireAfter <= 0 {
 		// not using cache expiration
@@ -406,6 +478,13 @@ func (l *UserSliceLoader) ClearExpired() {
 
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
 func (l *UserSliceLoader) unsafeSet(key int, value []example.User) {
+	if l.hookExternalCacheSet != nil {
+		l.hookExternalCacheSet(key, value)
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return
+	}
 
 	if l.expireAfter <= 0 {
 		// not using cache expiration

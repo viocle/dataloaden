@@ -18,6 +18,24 @@ type UserByIDAndOrgLoaderConfig struct {
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
 
+	// HookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	// If the key is found in the external cache, the value should be returned along with true.
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	// Both HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll should be set if using an external cache.
+	HookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+
+	// HookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+
+	// HookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	HookExternalCacheDelete func(key UserByIDAndOrg) error
+
+	// HookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	HookExternalCacheClearAll func() error
+
 	// HookBeforeFetch is called right before a fetch is performed
 	HookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
 
@@ -40,16 +58,19 @@ type UserByIDAndOrgLoaderConfig struct {
 // NewUserByIDAndOrgLoader creates a new UserByIDAndOrgLoader given a fetch, wait, and maxBatch
 func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgLoader {
 	l := &UserByIDAndOrgLoader{
-		fetch:    config.Fetch,
-		wait:     config.Wait,
-		maxBatch: config.MaxBatch,
-
-		hookBeforeFetch:   config.HookBeforeFetch,
-		hookAfterFetch:    config.HookAfterFetch,
-		hookAfterSet:      config.HookAfterSet,
-		hookAfterClear:    config.HookAfterClear,
-		hookAfterClearAll: config.HookAfterClearAll,
-		hookAfterExpired:  config.HookAfterExpired,
+		fetch:                     config.Fetch,
+		wait:                      config.Wait,
+		maxBatch:                  config.MaxBatch,
+		hookExternalCacheGet:      config.HookExternalCacheGet,
+		hookExternalCacheSet:      config.HookExternalCacheSet,
+		hookExternalCacheDelete:   config.HookExternalCacheDelete,
+		hookExternalCacheClearAll: config.HookExternalCacheClearAll,
+		hookBeforeFetch:           config.HookBeforeFetch,
+		hookAfterFetch:            config.HookAfterFetch,
+		hookAfterSet:              config.HookAfterSet,
+		hookAfterClear:            config.HookAfterClear,
+		hookAfterClearAll:         config.HookAfterClearAll,
+		hookAfterExpired:          config.HookAfterExpired,
 	}
 	l.batchPool = sync.Pool{
 		New: func() interface{} {
@@ -81,6 +102,22 @@ type UserByIDAndOrgLoader struct {
 
 	// mutex to prevent races
 	mu sync.Mutex
+
+	// hookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
+	// If the key is found in the external cache, the value should be returned along with true.
+	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
+	hookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+
+	// hookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+
+	// hookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
+	// This replaces the use of the internal cache.
+	hookExternalCacheDelete func(key UserByIDAndOrg) error
+
+	// hookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
+	hookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
 	hookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
@@ -146,16 +183,25 @@ func (l *UserByIDAndOrgLoader) createNewBatch() *userByIDAndOrgLoaderBatch {
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
 func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*User, error)) {
-	l.mu.Lock()
-
-	if len(l.cache) > 0 {
-		if it, ok := l.cache[key]; ok {
-			l.mu.Unlock()
-			return it, nil
+	if l.hookExternalCacheGet != nil {
+		if v, ok := l.hookExternalCacheGet(key); ok {
+			return v, nil
 		}
-	}
-	l.unsafeBatchSet()
+		// not found in external cache, continue
+		l.mu.Lock()
+		l.unsafeBatchSet()
+	} else {
+		l.mu.Lock()
 
+		if len(l.cache) > 0 {
+			if it, ok := l.cache[key]; ok {
+				l.mu.Unlock()
+				return it, nil
+			}
+		}
+		l.unsafeBatchSet()
+
+	}
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -231,6 +277,18 @@ func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*Us
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *UserByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value *User, forceReplace bool) bool {
+	if l.hookExternalCacheSet != nil {
+		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+		// and end up with the whole cache pointing to the same value.
+		cpy := *value
+		if err := l.hookExternalCacheSet(key, &cpy); err != nil {
+			return false
+		}
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return true
+	}
 	var found bool
 
 	if _, found = l.cache[key]; found && forceReplace {
@@ -281,6 +339,13 @@ func (l *UserByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value *User) {
 
 // Clear the value at key from the cache, if it exists
 func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
+	if l.hookExternalCacheDelete != nil {
+		l.hookExternalCacheDelete(key)
+		if l.hookAfterClear != nil {
+			l.hookAfterClear(key)
+		}
+		return
+	}
 
 	l.mu.Lock()
 	delete(l.cache, key)
@@ -293,6 +358,13 @@ func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 
 // ClearAll clears all values from the cache
 func (l *UserByIDAndOrgLoader) ClearAll() {
+	if l.hookExternalCacheClearAll != nil {
+		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAll != nil {
+			l.hookAfterClearAll()
+		}
+		return
+	}
 
 	l.mu.Lock()
 	l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
@@ -305,6 +377,13 @@ func (l *UserByIDAndOrgLoader) ClearAll() {
 
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
 func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
+	if l.hookExternalCacheSet != nil {
+		l.hookExternalCacheSet(key, value)
+		if l.hookAfterSet != nil {
+			l.hookAfterSet(key, value)
+		}
+		return
+	}
 
 	if l.cache == nil {
 		l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)

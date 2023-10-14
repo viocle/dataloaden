@@ -127,6 +127,7 @@ This fork does have some breaking changes. Primary differences are:
 2. `Cache Expiration` when you want a long lived dataloader or one that is re-used across multiple requests but do want values to live forever.
 3. `Performance Improvements` around memory allocation, key lookup time in large batches, and removal of some unnecessary function wraping around cache hits.
 4. `Hooks` allow you to call a function after certain events like when a value is set, deleted, or expired in the cache.
+5. External cache `Hooks`. These hooks, HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll completely bypass the internal cache allowing you to define your own functions to get/set/delete/clear all key/values from your external source.
 
 ##### All changes:
 1. Added cache expiration support. When creating a new loader, set the expireAfter time.Duration to the amount of time you want the cached items to be valid for. Cache expiration does not automatically remove the value from the loader's cache but will perform a new fetch if the value is expired when loading a key. Example usage for this would be to create your dataloader once and re-use it for all requests, not creating new ones for each request. This does mean you need to ensure you're properly clearing this dataloader when changes to the object occur so values in the dataloader do not become stale. Cache expiration can be completely removed from your generated code if you specify true in your generate call after your return type definition.
@@ -180,6 +181,7 @@ c.`HookAfterClearAll`: When you call the `ClearAll` function to clear the entire
 d.`HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
 e. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
 f. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
+g. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
 
 #### Benchmarks
 
@@ -190,17 +192,20 @@ goos: windows
 goarch: amd64
 pkg: github.com/viocle/dataloaden/example
 cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       27249440              45.21 ns/op            10 B/op          0 allocs/op
-BenchmarkLoader/random_spread-24                 2931494              591.8 ns/op           407 B/op          4 allocs/op
-BenchmarkLoader/concurently-24                       100           14288143 ns/op         12532 B/op         52 allocs/op
-BenchmarkLoaderStruct/caches-24                 19104612              57.94 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/random_spread-24          20508367              58.00 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/concurently-24             1000000               1083 ns/op            21 B/op          6 allocs/op
-BenchmarkLoaderExpires/caches-24                25801900              45.90 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExpires/random_spread-24          2761660              638.1 ns/op           430 B/op          5 allocs/op
-BenchmarkLoaderExpires/concurently-24                100           14028404 ns/op         12472 B/op         61 allocs/op
+BenchmarkLoader/caches-24                       27329870              45.69 ns/op            10 B/op          0 allocs/op
+BenchmarkLoader/random_spread-24                 2884179              607.2 ns/op           409 B/op          4 allocs/op
+BenchmarkLoader/concurently-24                       100           15407862 ns/op         12535 B/op         52 allocs/op
+BenchmarkLoaderStruct/caches-24                 19607616              57.86 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/random_spread-24          17773827              57.79 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/concurently-24              922983               1204 ns/op            21 B/op          6 allocs/op
+BenchmarkLoaderExpires/caches-24                26055859              46.25 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExpires/random_spread-24          2731736              662.7 ns/op           432 B/op          5 allocs/op
+BenchmarkLoaderExpires/concurently-24                100           15380083 ns/op         12685 B/op         62 allocs/op
+BenchmarkLoaderExternalCache/caches-24          23076656              47.90 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExternalCache/random_spread-24    2800898              604.8 ns/op           413 B/op          4 allocs/op
+BenchmarkLoaderExternalCache/concurently-24          100           15287353 ns/op         12742 B/op         52 allocs/op
 PASS
-ok      github.com/viocle/dataloaden/example    14.168s
+ok      github.com/viocle/dataloaden/example    19.834s
 
 example\slice\> go test -bench . -benchmem
 goos: windows
