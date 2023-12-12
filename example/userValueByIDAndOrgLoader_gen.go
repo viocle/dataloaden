@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	UserByIDAndOrgLoaderCacheKeyPrefix = "DataLoaderUserByIDAndOrgLoader_"
+	UserValueByIDAndOrgLoaderCacheKeyPrefix = "DataLoaderUserValueByIDAndOrgLoader_"
 )
 
-// UserByIDAndOrgLoaderConfig captures the config to create a new UserByIDAndOrgLoader
-type UserByIDAndOrgLoaderConfig struct {
+// UserValueByIDAndOrgLoaderConfig captures the config to create a new UserValueByIDAndOrgLoader
+type UserValueByIDAndOrgLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
-	Fetch func(keys []UserByIDAndOrg) ([]*User, []error)
+	Fetch func(keys []UserByIDAndOrg) ([]User, []error)
 
 	// Wait is how long to wait before sending a batch
 	Wait time.Duration
@@ -29,11 +29,11 @@ type UserByIDAndOrgLoaderConfig struct {
 	// If the key is found in the external cache, the value should be returned along with true.
 	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
 	// Both HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll should be set if using an external cache.
-	HookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+	HookExternalCacheGet func(key UserByIDAndOrg) (User, bool)
 
 	// HookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	HookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+	HookExternalCacheSet func(key UserByIDAndOrg, value User) error
 
 	// HookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
@@ -49,7 +49,7 @@ type UserByIDAndOrgLoaderConfig struct {
 	HookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
 
 	// HookAfterSet is called after a value is set in the cache
-	HookAfterSet func(key UserByIDAndOrg, value *User)
+	HookAfterSet func(key UserByIDAndOrg, value User)
 
 	// HookAfterClear is called after a value is cleared from the cache
 	HookAfterClear func(key UserByIDAndOrg)
@@ -60,13 +60,13 @@ type UserByIDAndOrgLoaderConfig struct {
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key UserByIDAndOrg)
 
-	// RedisConfig is used to configure a UserByIDAndOrgLoader backed by Redis, disabling the internal cache.
-	RedisConfig *UserByIDAndOrgLoaderRedisConfig
+	// RedisConfig is used to configure a UserValueByIDAndOrgLoader backed by Redis, disabling the internal cache.
+	RedisConfig *UserValueByIDAndOrgLoaderRedisConfig
 }
 
-// NewUserByIDAndOrgLoader creates a new UserByIDAndOrgLoader given a fetch, wait, and maxBatch
-func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgLoader {
-	l := &UserByIDAndOrgLoader{
+// NewUserValueByIDAndOrgLoader creates a new UserValueByIDAndOrgLoader given a fetch, wait, and maxBatch
+func NewUserValueByIDAndOrgLoader(config UserValueByIDAndOrgLoaderConfig) *UserValueByIDAndOrgLoader {
+	l := &UserValueByIDAndOrgLoader{
 		fetch:                     config.Fetch,
 		wait:                      config.Wait,
 		maxBatch:                  config.MaxBatch,
@@ -86,7 +86,7 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 		// validate we have all the required Redis functions. If not, force disable Redis
 		if l.redisConfig.GetFunc != nil && l.redisConfig.SetFunc != nil && l.redisConfig.DeleteFunc != nil {
 			// all Redis functions are present, enable Redis
-			l.redisConfig = &UserByIDAndOrgLoaderRedisConfig{
+			l.redisConfig = &UserValueByIDAndOrgLoaderRedisConfig{
 				SetTTL:     config.RedisConfig.SetTTL,
 				GetFunc:    config.RedisConfig.GetFunc,
 				SetFunc:    config.RedisConfig.SetFunc,
@@ -103,8 +103,8 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 	return l
 }
 
-// UserByIDAndOrgLoaderRedisConfig is used to configure a UserByIDAndOrgLoader backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
-type UserByIDAndOrgLoaderRedisConfig struct {
+// UserValueByIDAndOrgLoaderRedisConfig is used to configure a UserValueByIDAndOrgLoader backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
+type UserValueByIDAndOrgLoaderRedisConfig struct {
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
@@ -121,21 +121,21 @@ type UserByIDAndOrgLoaderRedisConfig struct {
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
 }
 
-// UserByIDAndOrgLoader batches and caches requests
-type UserByIDAndOrgLoader struct {
+// UserValueByIDAndOrgLoader batches and caches requests
+type UserValueByIDAndOrgLoader struct {
 	// this method provides the data for the loader
-	fetch func(keys []UserByIDAndOrg) ([]*User, []error)
+	fetch func(keys []UserByIDAndOrg) ([]User, []error)
 
 	// optional Redis configuration
-	redisConfig *UserByIDAndOrgLoaderRedisConfig
+	redisConfig *UserValueByIDAndOrgLoaderRedisConfig
 
 	// lazily created cache
 
-	cache map[UserByIDAndOrg]*User
+	cache map[UserByIDAndOrg]User
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
-	batch *userByIDAndOrgLoaderBatch
+	batch *userValueByIDAndOrgLoaderBatch
 
 	// how long to done before sending a batch
 	wait time.Duration
@@ -149,11 +149,11 @@ type UserByIDAndOrgLoader struct {
 	// hookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
 	// If the key is found in the external cache, the value should be returned along with true.
 	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
-	hookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+	hookExternalCacheGet func(key UserByIDAndOrg) (User, bool)
 
 	// hookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	hookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+	hookExternalCacheSet func(key UserByIDAndOrg, value User) error
 
 	// hookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
@@ -169,7 +169,7 @@ type UserByIDAndOrgLoader struct {
 	hookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
 
 	// HookAfterSet is called after a value is primed in the cache
-	hookAfterSet func(key UserByIDAndOrg, value *User)
+	hookAfterSet func(key UserByIDAndOrg, value User)
 
 	// HookAfterClear is called after a value is cleared from the cache
 	hookAfterClear func(key UserByIDAndOrg)
@@ -184,18 +184,18 @@ type UserByIDAndOrgLoader struct {
 	batchPool sync.Pool
 }
 
-type userByIDAndOrgLoaderBatch struct {
+type userValueByIDAndOrgLoaderBatch struct {
 	now     int64
 	done    chan struct{}
 	keysMap map[UserByIDAndOrg]int
 	keys    []UserByIDAndOrg
-	data    []*User
+	data    []User
 	errors  []error
 	closing bool
 }
 
 // Load a User by key, batching and caching will be applied automatically
-func (l *UserByIDAndOrgLoader) Load(key UserByIDAndOrg) (*User, error) {
+func (l *UserValueByIDAndOrgLoader) Load(key UserByIDAndOrg) (User, error) {
 	v, f := l.LoadThunk(key)
 	if f != nil {
 		return f()
@@ -204,13 +204,13 @@ func (l *UserByIDAndOrgLoader) Load(key UserByIDAndOrg) (*User, error) {
 }
 
 // unsafeBatchSet creates a new batch if one does not exist, otherwise it will reuse the existing batch
-func (l *UserByIDAndOrgLoader) unsafeBatchSet() {
+func (l *UserValueByIDAndOrgLoader) unsafeBatchSet() {
 	if l.batch == nil {
-		b := l.batchPool.Get().(*userByIDAndOrgLoaderBatch)
+		b := l.batchPool.Get().(*userValueByIDAndOrgLoaderBatch)
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &userByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
+		l.batch = &userValueByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -218,25 +218,25 @@ func (l *UserByIDAndOrgLoader) unsafeBatchSet() {
 }
 
 // createNewBatch creates a new batch
-func (l *UserByIDAndOrgLoader) createNewBatch() *userByIDAndOrgLoaderBatch {
-	return &userByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[UserByIDAndOrg]int, l.maxBatch), keys: make([]UserByIDAndOrg, 0, l.maxBatch), data: nil, errors: nil}
+func (l *UserValueByIDAndOrgLoader) createNewBatch() *userValueByIDAndOrgLoaderBatch {
+	return &userValueByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[UserByIDAndOrg]int, l.maxBatch), keys: make([]UserByIDAndOrg, 0, l.maxBatch), data: nil, errors: nil}
 }
 
 // LoadThunk returns a function that when called will block waiting for a User.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*User, error)) {
+func (l *UserValueByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (User, func() (User, error)) {
 	if l.redisConfig != nil {
 		// using Redis
-		v, err := l.redisConfig.GetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key))
+		v, err := l.redisConfig.GetFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserValueByIDAndOrgLoaderToString(key))
 		if err == nil {
 			// found in Redis, attempt to return value
 			if v == "" {
-				// key found, empty value, return nil
-				return nil, nil
+				// key found, empty value, return empty value
+				return User{}, nil
 			}
-			ret := &User{}
-			if err := json.Unmarshal([]byte(v), ret); err == nil {
+			ret := User{}
+			if err := json.Unmarshal([]byte(v), &ret); err == nil {
 				return ret, nil
 			}
 			// error unmarshalling, just add to batch
@@ -269,10 +269,10 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
 
-	return nil, func() (*User, error) {
+	return User{}, func() (User, error) {
 		<-batch.done
 
-		var data *User
+		var data User
 		if pos < len(batch.data) {
 			data = batch.data[pos]
 		}
@@ -297,9 +297,9 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
 // sub batches depending on how the loader is configured
-func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error) {
-	users := make([]*User, len(keys))
-	thunks := make(map[int]func() (*User, error), len(keys))
+func (l *UserValueByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]User, []error) {
+	users := make([]User, len(keys))
+	thunks := make(map[int]func() (User, error), len(keys))
 	errors := make([]error, len(keys))
 
 	for i, key := range keys {
@@ -319,9 +319,9 @@ func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error)
 // LoadAllThunk returns a function that when called will block waiting for a Users.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*User, []error) {
-	thunks := make(map[int]func() (*User, error), len(keys))
-	users := make([]*User, len(keys))
+func (l *UserValueByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]User, []error) {
+	thunks := make(map[int]func() (User, error), len(keys))
+	users := make([]User, len(keys))
 	for i, key := range keys {
 		if v, thunk := l.LoadThunk(key); thunk != nil {
 			thunks[i] = thunk
@@ -329,7 +329,7 @@ func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*Us
 			users[i] = v
 		}
 	}
-	return func() ([]*User, []error) {
+	return func() ([]User, []error) {
 		errors := make([]error, len(keys))
 		for i, thunk := range thunks {
 			users[i], errors[i] = thunk()
@@ -339,19 +339,16 @@ func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*Us
 }
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
-func (l *UserByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value *User, forceReplace bool) bool {
+func (l *UserValueByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value User, forceReplace bool) bool {
 	if l.redisConfig != nil {
 		// using Redis
-		if err := l.redisConfig.SetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL); err != nil {
+		if err := l.redisConfig.SetFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserValueByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL); err != nil {
 			return false
 		}
 		return true
 	}
 	if l.hookExternalCacheSet != nil {
-		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-		// and end up with the whole cache pointing to the same value.
-		cpy := *value
-		if err := l.hookExternalCacheSet(key, &cpy); err != nil {
+		if err := l.hookExternalCacheSet(key, value); err != nil {
 			return false
 		}
 		if l.hookAfterSet != nil {
@@ -365,17 +362,14 @@ func (l *UserByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value *User, forc
 		delete(l.cache, key)
 	}
 	if !found || forceReplace {
-		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-		// and end up with the whole cache pointing to the same value.
-		cpy := *value
-		l.unsafeSet(key, &cpy)
+		l.unsafeSet(key, value)
 	}
 
 	return !found || forceReplace
 }
 
 // PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
-func (l *UserByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []*User) []bool {
+func (l *UserValueByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []User) []bool {
 	if len(keys) != len(values) {
 		// keys and values must be the same length
 		return make([]bool, len(keys))
@@ -392,7 +386,7 @@ func (l *UserByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []*User) 
 // Prime the cache with the provided key and value. If the key already exists, no change is made
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
-func (l *UserByIDAndOrgLoader) Prime(key UserByIDAndOrg, value *User) bool {
+func (l *UserValueByIDAndOrgLoader) Prime(key UserByIDAndOrg, value User) bool {
 	l.mu.Lock()
 	found := l.unsafePrime(key, value, false)
 	l.mu.Unlock()
@@ -401,17 +395,17 @@ func (l *UserByIDAndOrgLoader) Prime(key UserByIDAndOrg, value *User) bool {
 
 // ForcePrime the cache with the provided key and value. If the key already exists, value is replaced
 // (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
-func (l *UserByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value *User) {
+func (l *UserValueByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value User) {
 	l.mu.Lock()
 	l.unsafePrime(key, value, true)
 	l.mu.Unlock()
 }
 
 // Clear the value at key from the cache, if it exists
-func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
+func (l *UserValueByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.DeleteFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key))
+		l.redisConfig.DeleteFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserValueByIDAndOrgLoaderToString(key))
 		return
 	}
 	if l.hookExternalCacheDelete != nil {
@@ -432,12 +426,12 @@ func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 }
 
 // ClearAll clears all values from the cache
-func (l *UserByIDAndOrgLoader) ClearAll() {
+func (l *UserValueByIDAndOrgLoader) ClearAll() {
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+"*")
+			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+"*")
 			// delete all these keys from Redis
 			for _, key := range keys {
 				l.redisConfig.DeleteFunc(context.Background(), key)
@@ -454,7 +448,7 @@ func (l *UserByIDAndOrgLoader) ClearAll() {
 	}
 
 	l.mu.Lock()
-	l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
+	l.cache = make(map[UserByIDAndOrg]User, l.maxBatch)
 	l.mu.Unlock()
 
 	if l.hookAfterClearAll != nil {
@@ -463,10 +457,10 @@ func (l *UserByIDAndOrgLoader) ClearAll() {
 }
 
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
-func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
+func (l *UserValueByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value User) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.SetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL)
+		l.redisConfig.SetFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserValueByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL)
 		return
 	}
 	if l.hookExternalCacheSet != nil {
@@ -478,7 +472,7 @@ func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
 	}
 
 	if l.cache == nil {
-		l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
+		l.cache = make(map[UserByIDAndOrg]User, l.maxBatch)
 	}
 	l.cache[key] = value
 
@@ -489,7 +483,7 @@ func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
 
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
-func (b *userByIDAndOrgLoaderBatch) keyIndex(l *UserByIDAndOrgLoader, key UserByIDAndOrg) int {
+func (b *userValueByIDAndOrgLoaderBatch) keyIndex(l *UserValueByIDAndOrgLoader, key UserByIDAndOrg) int {
 	if i, ok := b.keysMap[key]; ok {
 		return i
 	}
@@ -513,7 +507,7 @@ func (b *userByIDAndOrgLoaderBatch) keyIndex(l *UserByIDAndOrgLoader, key UserBy
 }
 
 // startTimer will wait the desired wait time before sending the batch unless another batch limit had been reached
-func (b *userByIDAndOrgLoaderBatch) startTimer(l *UserByIDAndOrgLoader) {
+func (b *userValueByIDAndOrgLoaderBatch) startTimer(l *UserValueByIDAndOrgLoader) {
 	time.Sleep(l.wait)
 	l.mu.Lock()
 
@@ -530,19 +524,19 @@ func (b *userByIDAndOrgLoaderBatch) startTimer(l *UserByIDAndOrgLoader) {
 }
 
 // end calls fetch and closes the done channel to unblock all thunks
-func (b *userByIDAndOrgLoaderBatch) end(l *UserByIDAndOrgLoader) {
+func (b *userValueByIDAndOrgLoaderBatch) end(l *UserValueByIDAndOrgLoader) {
 	if l.hookBeforeFetch != nil {
-		l.hookBeforeFetch(b.keys, "UserByIDAndOrgLoader")
+		l.hookBeforeFetch(b.keys, "UserValueByIDAndOrgLoader")
 	}
 	b.data, b.errors = l.fetch(b.keys)
 	if l.hookAfterFetch != nil {
-		l.hookAfterFetch(b.keys, "UserByIDAndOrgLoader")
+		l.hookAfterFetch(b.keys, "UserValueByIDAndOrgLoader")
 	}
 	close(b.done)
 }
 
-// MarshalUserByIDAndOrgLoaderToString is a helper method to marshal a UserByIDAndOrgLoader to a string
-func (l *UserByIDAndOrgLoader) MarshalUserByIDAndOrgLoaderToString(v UserByIDAndOrg) string {
+// MarshalUserValueByIDAndOrgLoaderToString is a helper method to marshal a UserValueByIDAndOrgLoader to a string
+func (l *UserValueByIDAndOrgLoader) MarshalUserValueByIDAndOrgLoaderToString(v UserByIDAndOrg) string {
 	ret, _ := json.Marshal(v)
 	return string(ret)
 }

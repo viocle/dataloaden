@@ -5,18 +5,19 @@ package example
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"time"
 )
 
 const (
-	UserByIDAndOrgLoaderCacheKeyPrefix = "DataLoaderUserByIDAndOrgLoader_"
+	UserIntLoaderCacheKeyPrefix = "DataLoaderUserIntLoader_"
 )
 
-// UserByIDAndOrgLoaderConfig captures the config to create a new UserByIDAndOrgLoader
-type UserByIDAndOrgLoaderConfig struct {
+// UserIntLoaderConfig captures the config to create a new UserIntLoader
+type UserIntLoaderConfig struct {
 	// Fetch is a method that provides the data for the loader
-	Fetch func(keys []UserByIDAndOrg) ([]*User, []error)
+	Fetch func(keys []int) ([]*User, []error)
 
 	// Wait is how long to wait before sending a batch
 	Wait time.Duration
@@ -24,52 +25,70 @@ type UserByIDAndOrgLoaderConfig struct {
 	// MaxBatch will limit the maximum number of keys to send in one batch, 0 = no limit
 	MaxBatch int
 
+	// ExpireAfter determines how long until cached items expire. Set to 0 to disable expiration
+	ExpireAfter time.Duration
+
 	// HookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
 	// If the key is found in the external cache, the value should be returned along with true.
 	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
 	// Both HookExternalCacheGet, HookExternalCacheSet, HookExternalCacheDelete, and HookExternalCacheClearAll should be set if using an external cache.
-	HookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+	HookExternalCacheGet func(key int) (*User, bool)
 
 	// HookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	HookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+	HookExternalCacheSet func(key int, value *User) error
 
 	// HookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	HookExternalCacheDelete func(key UserByIDAndOrg) error
+	HookExternalCacheDelete func(key int) error
 
 	// HookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
 	HookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
-	HookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
+	HookBeforeFetch func(keys []int, loaderName string)
 
 	// HookAfterFetch is called right after a fetch is performed
-	HookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
+	HookAfterFetch func(keys []int, loaderName string)
 
 	// HookAfterSet is called after a value is set in the cache
-	HookAfterSet func(key UserByIDAndOrg, value *User)
+	HookAfterSet func(key int, value *User)
 
 	// HookAfterClear is called after a value is cleared from the cache
-	HookAfterClear func(key UserByIDAndOrg)
+	HookAfterClear func(key int)
 
 	// HookAfterClearAll is called after all values are cleared from the cache
 	HookAfterClearAll func()
 
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
-	HookAfterExpired func(key UserByIDAndOrg)
+	HookAfterExpired func(key int)
 
-	// RedisConfig is used to configure a UserByIDAndOrgLoader backed by Redis, disabling the internal cache.
-	RedisConfig *UserByIDAndOrgLoaderRedisConfig
+	// RedisConfig is used to configure a UserIntLoader backed by Redis, disabling the internal cache.
+	RedisConfig *UserIntLoaderRedisConfig
 }
 
-// NewUserByIDAndOrgLoader creates a new UserByIDAndOrgLoader given a fetch, wait, and maxBatch
-func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgLoader {
-	l := &UserByIDAndOrgLoader{
+// UserIntLoaderCacheItem defines a cache item when using dataloader cache expiration where expireAfter > 0
+type UserIntLoaderCacheItem struct {
+	// Expires contains the time this CacheItem expires
+	Expires int64
+
+	// Value contains the cached *User
+	Value *User
+}
+
+// expired returns true if the cache item has expired
+func (c *UserIntLoaderCacheItem) expired(now int64) bool {
+	return c.Expires < now
+}
+
+// NewUserIntLoader creates a new UserIntLoader given a fetch, wait, and maxBatch
+func NewUserIntLoader(config UserIntLoaderConfig) *UserIntLoader {
+	l := &UserIntLoader{
 		fetch:                     config.Fetch,
 		wait:                      config.Wait,
 		maxBatch:                  config.MaxBatch,
+		expireAfter:               config.ExpireAfter.Nanoseconds(),
 		hookExternalCacheGet:      config.HookExternalCacheGet,
 		hookExternalCacheSet:      config.HookExternalCacheSet,
 		hookExternalCacheDelete:   config.HookExternalCacheDelete,
@@ -86,7 +105,7 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 		// validate we have all the required Redis functions. If not, force disable Redis
 		if l.redisConfig.GetFunc != nil && l.redisConfig.SetFunc != nil && l.redisConfig.DeleteFunc != nil {
 			// all Redis functions are present, enable Redis
-			l.redisConfig = &UserByIDAndOrgLoaderRedisConfig{
+			l.redisConfig = &UserIntLoaderRedisConfig{
 				SetTTL:     config.RedisConfig.SetTTL,
 				GetFunc:    config.RedisConfig.GetFunc,
 				SetFunc:    config.RedisConfig.SetFunc,
@@ -103,8 +122,8 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 	return l
 }
 
-// UserByIDAndOrgLoaderRedisConfig is used to configure a UserByIDAndOrgLoader backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
-type UserByIDAndOrgLoaderRedisConfig struct {
+// UserIntLoaderRedisConfig is used to configure a UserIntLoader backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
+type UserIntLoaderRedisConfig struct {
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
@@ -121,21 +140,23 @@ type UserByIDAndOrgLoaderRedisConfig struct {
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
 }
 
-// UserByIDAndOrgLoader batches and caches requests
-type UserByIDAndOrgLoader struct {
+// UserIntLoader batches and caches requests
+type UserIntLoader struct {
 	// this method provides the data for the loader
-	fetch func(keys []UserByIDAndOrg) ([]*User, []error)
+	fetch func(keys []int) ([]*User, []error)
 
 	// optional Redis configuration
-	redisConfig *UserByIDAndOrgLoaderRedisConfig
+	redisConfig *UserIntLoaderRedisConfig
 
 	// lazily created cache
 
-	cache map[UserByIDAndOrg]*User
+	cacheExpire map[int]*UserIntLoaderCacheItem
+
+	cache map[int]*User
 
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
-	batch *userByIDAndOrgLoaderBatch
+	batch *userIntLoaderBatch
 
 	// how long to done before sending a batch
 	wait time.Duration
@@ -143,59 +164,62 @@ type UserByIDAndOrgLoader struct {
 	// this will limit the maximum number of keys to send in one batch, 0 = no limit
 	maxBatch int
 
+	// the amount of nanoseconds a cache item should remain valid. This will determine if cache expiration will be used, 0 = no expiration
+	expireAfter int64
+
 	// mutex to prevent races
 	mu sync.Mutex
 
 	// hookExternalCacheGet is a method that provides the ability to lookup a key in an external cache with an external hook.
 	// If the key is found in the external cache, the value should be returned along with true.
 	// If the key is not found in the external cache, an empty/nil value should be returned along with false.
-	hookExternalCacheGet func(key UserByIDAndOrg) (*User, bool)
+	hookExternalCacheGet func(key int) (*User, bool)
 
 	// hookExternalCacheSet is a method that provides the ability to set a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	hookExternalCacheSet func(key UserByIDAndOrg, value *User) error
+	hookExternalCacheSet func(key int, value *User) error
 
 	// hookBeforeFetch is a method that provides the ability to delete/clear a key in an external cache with an external hook.
 	// This replaces the use of the internal cache.
-	hookExternalCacheDelete func(key UserByIDAndOrg) error
+	hookExternalCacheDelete func(key int) error
 
 	// hookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
 	hookExternalCacheClearAll func() error
 
 	// HookBeforeFetch is called right before a fetch is performed
-	hookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
+	hookBeforeFetch func(keys []int, loaderName string)
 
 	// HookAfterFetch is called right after a fetch is performed
-	hookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
+	hookAfterFetch func(keys []int, loaderName string)
 
 	// HookAfterSet is called after a value is primed in the cache
-	hookAfterSet func(key UserByIDAndOrg, value *User)
+	hookAfterSet func(key int, value *User)
 
 	// HookAfterClear is called after a value is cleared from the cache
-	hookAfterClear func(key UserByIDAndOrg)
+	hookAfterClear func(key int)
 
 	// HookAfterClearAll is called after all values are cleared from the cache
 	hookAfterClearAll func()
 
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
-	hookAfterExpired func(key UserByIDAndOrg)
+	hookAfterExpired func(key int)
 
 	// pool of batches
 	batchPool sync.Pool
 }
 
-type userByIDAndOrgLoaderBatch struct {
+type userIntLoaderBatch struct {
 	now     int64
 	done    chan struct{}
-	keysMap map[UserByIDAndOrg]int
-	keys    []UserByIDAndOrg
+	keysMap map[int]int
+	keys    []int
 	data    []*User
 	errors  []error
 	closing bool
 }
 
 // Load a User by key, batching and caching will be applied automatically
-func (l *UserByIDAndOrgLoader) Load(key UserByIDAndOrg) (*User, error) {
+func (l *UserIntLoader) Load(key int) (*User, error) {
 	v, f := l.LoadThunk(key)
 	if f != nil {
 		return f()
@@ -204,13 +228,13 @@ func (l *UserByIDAndOrgLoader) Load(key UserByIDAndOrg) (*User, error) {
 }
 
 // unsafeBatchSet creates a new batch if one does not exist, otherwise it will reuse the existing batch
-func (l *UserByIDAndOrgLoader) unsafeBatchSet() {
+func (l *UserIntLoader) unsafeBatchSet() {
 	if l.batch == nil {
-		b := l.batchPool.Get().(*userByIDAndOrgLoaderBatch)
+		b := l.batchPool.Get().(*userIntLoaderBatch)
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &userByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
+		l.batch = &userIntLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -218,17 +242,17 @@ func (l *UserByIDAndOrgLoader) unsafeBatchSet() {
 }
 
 // createNewBatch creates a new batch
-func (l *UserByIDAndOrgLoader) createNewBatch() *userByIDAndOrgLoaderBatch {
-	return &userByIDAndOrgLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[UserByIDAndOrg]int, l.maxBatch), keys: make([]UserByIDAndOrg, 0, l.maxBatch), data: nil, errors: nil}
+func (l *UserIntLoader) createNewBatch() *userIntLoaderBatch {
+	return &userIntLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[int]int, l.maxBatch), keys: make([]int, 0, l.maxBatch), data: nil, errors: nil}
 }
 
 // LoadThunk returns a function that when called will block waiting for a User.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*User, error)) {
+func (l *UserIntLoader) LoadThunk(key int) (*User, func() (*User, error)) {
 	if l.redisConfig != nil {
 		// using Redis
-		v, err := l.redisConfig.GetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key))
+		v, err := l.redisConfig.GetFunc(context.Background(), UserIntLoaderCacheKeyPrefix+strconv.FormatInt(int64(key), 10))
 		if err == nil {
 			// found in Redis, attempt to return value
 			if v == "" {
@@ -255,13 +279,31 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 		} else {
 			l.mu.Lock()
 
-			if len(l.cache) > 0 {
+			if l.expireAfter <= 0 && len(l.cache) > 0 {
+				// not using cache expiration
 				if it, ok := l.cache[key]; ok {
 					l.mu.Unlock()
 					return it, nil
 				}
+				l.unsafeBatchSet()
+			} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
+				// using cache expiration
+				l.unsafeBatchSet()
+				if it, ok := l.cacheExpire[key]; ok {
+					if it != nil && !it.expired(l.batch.now) {
+						l.mu.Unlock()
+						return it.Value, nil
+					}
+					// cache item has expired, clear from cache
+					delete(l.cacheExpire, key)
+					if l.hookAfterExpired != nil {
+						l.hookAfterExpired(key)
+					}
+				}
+			} else {
+				// no cache
+				l.unsafeBatchSet()
 			}
-			l.unsafeBatchSet()
 
 		}
 	}
@@ -297,7 +339,7 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
 // sub batches depending on how the loader is configured
-func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error) {
+func (l *UserIntLoader) LoadAll(keys []int) ([]*User, []error) {
 	users := make([]*User, len(keys))
 	thunks := make(map[int]func() (*User, error), len(keys))
 	errors := make([]error, len(keys))
@@ -319,7 +361,7 @@ func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error)
 // LoadAllThunk returns a function that when called will block waiting for a Users.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
-func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*User, []error) {
+func (l *UserIntLoader) LoadAllThunk(keys []int) func() ([]*User, []error) {
 	thunks := make(map[int]func() (*User, error), len(keys))
 	users := make([]*User, len(keys))
 	for i, key := range keys {
@@ -339,10 +381,10 @@ func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*Us
 }
 
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
-func (l *UserByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value *User, forceReplace bool) bool {
+func (l *UserIntLoader) unsafePrime(key int, value *User, forceReplace bool) bool {
 	if l.redisConfig != nil {
 		// using Redis
-		if err := l.redisConfig.SetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL); err != nil {
+		if err := l.redisConfig.SetFunc(context.Background(), UserIntLoaderCacheKeyPrefix+strconv.FormatInt(int64(key), 10), value, l.redisConfig.SetTTL); err != nil {
 			return false
 		}
 		return true
@@ -361,21 +403,37 @@ func (l *UserByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value *User, forc
 	}
 	var found bool
 
-	if _, found = l.cache[key]; found && forceReplace {
-		delete(l.cache, key)
-	}
-	if !found || forceReplace {
-		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
-		// and end up with the whole cache pointing to the same value.
-		cpy := *value
-		l.unsafeSet(key, &cpy)
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+
+		if _, found = l.cache[key]; found && forceReplace {
+			delete(l.cache, key)
+		}
+		if !found || forceReplace {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := *value
+			l.unsafeSet(key, &cpy)
+		}
+
+	} else {
+		// using cache expiration
+		if _, found = l.cacheExpire[key]; found && forceReplace {
+			delete(l.cacheExpire, key)
+		}
+		if !found || forceReplace {
+			// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
+			// and end up with the whole cache pointing to the same value.
+			cpy := *value
+			l.unsafeSet(key, &cpy)
+		}
 	}
 
 	return !found || forceReplace
 }
 
 // PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
-func (l *UserByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []*User) []bool {
+func (l *UserIntLoader) PrimeMany(keys []int, values []*User) []bool {
 	if len(keys) != len(values) {
 		// keys and values must be the same length
 		return make([]bool, len(keys))
@@ -392,7 +450,7 @@ func (l *UserByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []*User) 
 // Prime the cache with the provided key and value. If the key already exists, no change is made
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
-func (l *UserByIDAndOrgLoader) Prime(key UserByIDAndOrg, value *User) bool {
+func (l *UserIntLoader) Prime(key int, value *User) bool {
 	l.mu.Lock()
 	found := l.unsafePrime(key, value, false)
 	l.mu.Unlock()
@@ -401,17 +459,17 @@ func (l *UserByIDAndOrgLoader) Prime(key UserByIDAndOrg, value *User) bool {
 
 // ForcePrime the cache with the provided key and value. If the key already exists, value is replaced
 // (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
-func (l *UserByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value *User) {
+func (l *UserIntLoader) ForcePrime(key int, value *User) {
 	l.mu.Lock()
 	l.unsafePrime(key, value, true)
 	l.mu.Unlock()
 }
 
 // Clear the value at key from the cache, if it exists
-func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
+func (l *UserIntLoader) Clear(key int) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.DeleteFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key))
+		l.redisConfig.DeleteFunc(context.Background(), UserIntLoaderCacheKeyPrefix+strconv.FormatInt(int64(key), 10))
 		return
 	}
 	if l.hookExternalCacheDelete != nil {
@@ -422,9 +480,19 @@ func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 		return
 	}
 
-	l.mu.Lock()
-	delete(l.cache, key)
-	l.mu.Unlock()
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+
+		l.mu.Lock()
+		delete(l.cache, key)
+		l.mu.Unlock()
+
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		delete(l.cacheExpire, key)
+		l.mu.Unlock()
+	}
 
 	if l.hookAfterClear != nil {
 		l.hookAfterClear(key)
@@ -432,12 +500,12 @@ func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 }
 
 // ClearAll clears all values from the cache
-func (l *UserByIDAndOrgLoader) ClearAll() {
+func (l *UserIntLoader) ClearAll() {
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+"*")
+			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserIntLoaderCacheKeyPrefix+"*")
 			// delete all these keys from Redis
 			for _, key := range keys {
 				l.redisConfig.DeleteFunc(context.Background(), key)
@@ -453,20 +521,53 @@ func (l *UserByIDAndOrgLoader) ClearAll() {
 		return
 	}
 
-	l.mu.Lock()
-	l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
-	l.mu.Unlock()
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+
+		l.mu.Lock()
+		l.cache = make(map[int]*User, l.maxBatch)
+		l.mu.Unlock()
+
+	} else {
+		// using cache expiration
+		l.mu.Lock()
+		l.cacheExpire = make(map[int]*UserIntLoaderCacheItem, l.maxBatch)
+		l.mu.Unlock()
+	}
 
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}
 }
 
+// ClearExpired clears all expired values from the cache if cache expiration is being used
+func (l *UserIntLoader) ClearExpired() {
+	if l.redisConfig != nil {
+		// using Redis. Nothing to do, TTL will handle this
+		return
+	}
+	if l.expireAfter > 0 {
+		// using cache expiration
+		tNow := time.Now().UnixNano()
+		l.mu.Lock()
+		for cacheKey, cacheItem := range l.cacheExpire {
+			if cacheItem != nil && tNow > cacheItem.Expires {
+				// value has expired
+				delete(l.cacheExpire, cacheKey)
+				if l.hookAfterExpired != nil {
+					l.hookAfterExpired(cacheKey)
+				}
+			}
+		}
+		l.mu.Unlock()
+	}
+}
+
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
-func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
+func (l *UserIntLoader) unsafeSet(key int, value *User) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.SetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.MarshalUserByIDAndOrgLoaderToString(key), value, l.redisConfig.SetTTL)
+		l.redisConfig.SetFunc(context.Background(), UserIntLoaderCacheKeyPrefix+strconv.FormatInt(int64(key), 10), value, l.redisConfig.SetTTL)
 		return
 	}
 	if l.hookExternalCacheSet != nil {
@@ -477,10 +578,21 @@ func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
 		return
 	}
 
-	if l.cache == nil {
-		l.cache = make(map[UserByIDAndOrg]*User, l.maxBatch)
+	if l.expireAfter <= 0 {
+		// not using cache expiration
+
+		if l.cache == nil {
+			l.cache = make(map[int]*User, l.maxBatch)
+		}
+		l.cache[key] = value
+
+	} else {
+		// using cache expiration
+		if l.cacheExpire == nil {
+			l.cacheExpire = make(map[int]*UserIntLoaderCacheItem, l.maxBatch)
+		}
+		l.cacheExpire[key] = &UserIntLoaderCacheItem{Expires: time.Now().UnixNano() + l.expireAfter, Value: value}
 	}
-	l.cache[key] = value
 
 	if l.hookAfterSet != nil {
 		l.hookAfterSet(key, value)
@@ -489,7 +601,7 @@ func (l *UserByIDAndOrgLoader) unsafeSet(key UserByIDAndOrg, value *User) {
 
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
-func (b *userByIDAndOrgLoaderBatch) keyIndex(l *UserByIDAndOrgLoader, key UserByIDAndOrg) int {
+func (b *userIntLoaderBatch) keyIndex(l *UserIntLoader, key int) int {
 	if i, ok := b.keysMap[key]; ok {
 		return i
 	}
@@ -513,7 +625,7 @@ func (b *userByIDAndOrgLoaderBatch) keyIndex(l *UserByIDAndOrgLoader, key UserBy
 }
 
 // startTimer will wait the desired wait time before sending the batch unless another batch limit had been reached
-func (b *userByIDAndOrgLoaderBatch) startTimer(l *UserByIDAndOrgLoader) {
+func (b *userIntLoaderBatch) startTimer(l *UserIntLoader) {
 	time.Sleep(l.wait)
 	l.mu.Lock()
 
@@ -530,19 +642,19 @@ func (b *userByIDAndOrgLoaderBatch) startTimer(l *UserByIDAndOrgLoader) {
 }
 
 // end calls fetch and closes the done channel to unblock all thunks
-func (b *userByIDAndOrgLoaderBatch) end(l *UserByIDAndOrgLoader) {
+func (b *userIntLoaderBatch) end(l *UserIntLoader) {
 	if l.hookBeforeFetch != nil {
-		l.hookBeforeFetch(b.keys, "UserByIDAndOrgLoader")
+		l.hookBeforeFetch(b.keys, "UserIntLoader")
 	}
 	b.data, b.errors = l.fetch(b.keys)
 	if l.hookAfterFetch != nil {
-		l.hookAfterFetch(b.keys, "UserByIDAndOrgLoader")
+		l.hookAfterFetch(b.keys, "UserIntLoader")
 	}
 	close(b.done)
 }
 
-// MarshalUserByIDAndOrgLoaderToString is a helper method to marshal a UserByIDAndOrgLoader to a string
-func (l *UserByIDAndOrgLoader) MarshalUserByIDAndOrgLoaderToString(v UserByIDAndOrg) string {
+// MarshalUserIntLoaderToString is a helper method to marshal a UserIntLoader to a string
+func (l *UserIntLoader) MarshalUserIntLoaderToString(v int) string {
 	ret, _ := json.Marshal(v)
 	return string(ret)
 }

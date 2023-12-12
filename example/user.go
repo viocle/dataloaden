@@ -1,5 +1,8 @@
 //go:generate go run github.com/viocle/dataloaden UserLoader string *github.com/viocle/dataloaden/example.User
 //go:generate go run github.com/viocle/dataloaden UserByIDAndOrgLoader UserByIDAndOrg *github.com/viocle/dataloaden/example.User true
+//go:generate go run github.com/viocle/dataloaden UserValueByIDAndOrgLoader UserByIDAndOrg github.com/viocle/dataloaden/example.User true
+//go:generate go run github.com/viocle/dataloaden UserIntLoader int *github.com/viocle/dataloaden/example.User
+//go:generate go run github.com/viocle/dataloaden UserFloatLoader float64 *github.com/viocle/dataloaden/example.User
 
 package example
 
@@ -15,8 +18,8 @@ type User struct {
 }
 
 type UserByIDAndOrg struct {
-	ID    string
-	OrgID string
+	ID    string `json:"id"`
+	OrgID string `json:"oid"`
 }
 
 // NewLoader will collect user requests for 2 milliseconds and send them as a single batch to the fetch func

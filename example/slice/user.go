@@ -1,4 +1,5 @@
 //go:generate go run github.com/viocle/dataloaden UserSliceLoader int []github.com/viocle/dataloaden/example.User
+//go:generate go run github.com/viocle/dataloaden UserIntSliceLoader int []*github.com/viocle/dataloaden/example.User
 
 package slice
 

@@ -174,8 +174,9 @@ func lcFirst(s string) string {
 	return string(r)
 }
 
+// LoadThunkMissReturnType returns the default value for the given type
 func LoadThunkMissReturnType(t string) string {
-	if t == "interface{}" || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "[]") {
+	if t == "interface{}" || strings.HasPrefix(t, "*") || strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
 		// nullable type
 		return "nil"
 	}
@@ -188,5 +189,97 @@ func LoadThunkMissReturnType(t string) string {
 		return "false"
 	default:
 		return t + "{}"
+	}
+}
+
+// LoadThunkMarshalType returns the code to handle marshaling the given type from a string in LoadThunk
+func LoadThunkMarshalType(t string) string {
+	if strings.HasPrefix(t, "*") {
+		// pointer type
+		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nret := &%s{}\nif err := json.Unmarshal([]byte(v), ret); err == nil {\nreturn ret, nil\n}", t[1:])
+	} else if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
+		// slice/map type
+		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nvar ret %s\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t)
+	}
+	switch t {
+	case "string":
+		return "return v, nil"
+	case "int", "int8", "int16", "int32", "rune", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128", "byte":
+		return fmt.Sprintf("ret, err := strconv.Parse%s(v, 10, 64)\nif err == nil {\n\treturn %s(ret), nil\n}", strconvParseType(t), t)
+	case "bool":
+		return "ret, err := strconv.ParseBool(v)\nif err == nil {\n\treturn ret, nil\n}"
+	default:
+		// probably a struct by value. Try to unmarshal from json
+		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return empty value\nreturn %s{}, nil\n}\nret := %s{}\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t, t)
+	}
+}
+
+// strconvParseType returns the type to use in strconv.Parse* for the given type
+func strconvParseType(t string) string {
+	switch t {
+	case "byte", "int8", "int16", "int32", "int64", "rune":
+		return "Int"
+	case "uint", "uint8", "uint16", "uint32", "uint64":
+		return "Uint"
+	case "float32", "float64":
+		return "Float"
+	case "bool":
+		return "Bool"
+	case "complex64", "complex128":
+		return "Complex"
+	default:
+		return ""
+	}
+}
+
+func IsStructType(t string) bool {
+	switch t {
+	case "byte", "int8", "int16", "int32", "rune", "int", "int64", "uint", "uint8", "uint16", "uint32", "uintptr", "uint64", "float32", "float64", "complex64", "complex128", "bool", "string", "[]string":
+		return false
+	default:
+		if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
+			return false
+		}
+		return true
+	}
+}
+
+// ToRedisKey returns the code to convert the given key to a string for use as a redis key
+func ToRedisKey(t, name string, keyType interface{}) string {
+	if t == "string" {
+		// no conversion needed, use directly
+		return "key"
+	}
+	// we'll need to convert the type to a string
+	switch t {
+	case "byte", "int8", "int16", "int32", "rune", "int":
+		return "strconv.FormatInt(int64(key), 10)"
+	case "int64":
+		// dont include unnecessary type conversion
+		return "strconv.FormatInt(key, 10)"
+	case "uint", "uint8", "uint16", "uint32", "uintptr":
+		return "strconv.FormatUint(uint64(key), 10)"
+	case "uint64":
+		// dont include unnecessary type conversion
+		return "strconv.FormatUint(key, 10)"
+	case "bool":
+		return "strconv.FormatBool(key)"
+	case "float32":
+		return "strconv.FormatFloat(float64(key), 'f', -1, 64)"
+	case "float64":
+		// dont include unnecessary type conversion
+		return "strconv.FormatFloat(key, 'f', -1, 64)"
+	case "complex64":
+		return "strconv.FormatComplex(complex128(key), 'f', -1, 64)"
+	case "complex128":
+		// dont include unnecessary type conversion
+		return "strconv.FormatComplex(key, 'f', -1, 64)"
+	case "[]string":
+		return "strings.Join(key, \":\")"
+	default:
+		// serialize to json and use as key. Redis key length limit is 512MB, but if you're using a key that large you're doing it wrong
+		// to reduce the size of your keys, try setting json tags on your struct fields to reduce the field name length and ommit empty fields
+		// see type UserByIDAndOrg in example/user.go for an example. oid will be in the json result instead of OrgID
+		return fmt.Sprintf("l.Marshal%sToString(key)", name)
 	}
 }
