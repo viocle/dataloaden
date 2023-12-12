@@ -105,12 +105,13 @@ func NewUserLoader(config UserLoaderConfig) *UserLoader {
 	if config.RedisConfig != nil {
 		// validate we have all the required Redis functions. If not, force disable Redis
 		if l.redisConfig.GetFunc != nil && l.redisConfig.SetFunc != nil && l.redisConfig.DeleteFunc != nil {
-			// all Redis functions are present, enable Redis
+			// all required Redis functions are present, enable Redis
 			l.redisConfig = &UserLoaderRedisConfig{
-				SetTTL:     config.RedisConfig.SetTTL,
-				GetFunc:    config.RedisConfig.GetFunc,
-				SetFunc:    config.RedisConfig.SetFunc,
-				DeleteFunc: config.RedisConfig.DeleteFunc,
+				SetTTL:         config.RedisConfig.SetTTL, // optional
+				GetFunc:        config.RedisConfig.GetFunc,
+				SetFunc:        config.RedisConfig.SetFunc,
+				DeleteFunc:     config.RedisConfig.DeleteFunc,
+				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // optional
 			}
 		}
 	}
@@ -136,6 +137,9 @@ type UserLoaderRedisConfig struct {
 
 	// DeleteFunc should delete a value in Redis given a key
 	DeleteFunc func(ctx context.Context, key string) error
+
+	// DeleteManyFunc should delete one or more values in Redis given a set of keys
+	DeleteManyFunc func(ctx context.Context, key []string) error
 
 	// GetKeysFunc should return all keys in Redis matching the given pattern. If not set then ClearAll() for this dataloader will not be supported.
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
@@ -255,8 +259,7 @@ func (l *UserLoader) LoadThunk(key string) (*example.User, func() (*example.User
 		// using Redis
 		v, err := l.redisConfig.GetFunc(context.Background(), UserLoaderCacheKeyPrefix+key)
 		if err == nil {
-			// found in Redis, attempt to return value
-			if v == "" {
+			if v == "" || v == "null" {
 				// key found, empty value, return nil
 				return nil, nil
 			}
@@ -264,7 +267,7 @@ func (l *UserLoader) LoadThunk(key string) (*example.User, func() (*example.User
 			if err := json.Unmarshal([]byte(v), ret); err == nil {
 				return ret, nil
 			}
-			// error unmarshalling, just add to batch
+
 		}
 		// not found in Redis or error, continue
 		l.mu.Lock()
@@ -508,8 +511,12 @@ func (l *UserLoader) ClearAll() {
 			// get all keys from Redis
 			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserLoaderCacheKeyPrefix+"*")
 			// delete all these keys from Redis
-			for _, key := range keys {
-				l.redisConfig.DeleteFunc(context.Background(), key)
+			if l.redisConfig.DeleteManyFunc != nil {
+				l.redisConfig.DeleteManyFunc(context.Background(), keys)
+			} else {
+				for _, key := range keys {
+					l.redisConfig.DeleteFunc(context.Background(), key)
+				}
 			}
 		}
 		return

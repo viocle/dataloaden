@@ -104,12 +104,13 @@ func NewUserFloatLoader(config UserFloatLoaderConfig) *UserFloatLoader {
 	if config.RedisConfig != nil {
 		// validate we have all the required Redis functions. If not, force disable Redis
 		if l.redisConfig.GetFunc != nil && l.redisConfig.SetFunc != nil && l.redisConfig.DeleteFunc != nil {
-			// all Redis functions are present, enable Redis
+			// all required Redis functions are present, enable Redis
 			l.redisConfig = &UserFloatLoaderRedisConfig{
-				SetTTL:     config.RedisConfig.SetTTL,
-				GetFunc:    config.RedisConfig.GetFunc,
-				SetFunc:    config.RedisConfig.SetFunc,
-				DeleteFunc: config.RedisConfig.DeleteFunc,
+				SetTTL:         config.RedisConfig.SetTTL, // optional
+				GetFunc:        config.RedisConfig.GetFunc,
+				SetFunc:        config.RedisConfig.SetFunc,
+				DeleteFunc:     config.RedisConfig.DeleteFunc,
+				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // optional
 			}
 		}
 	}
@@ -135,6 +136,9 @@ type UserFloatLoaderRedisConfig struct {
 
 	// DeleteFunc should delete a value in Redis given a key
 	DeleteFunc func(ctx context.Context, key string) error
+
+	// DeleteManyFunc should delete one or more values in Redis given a set of keys
+	DeleteManyFunc func(ctx context.Context, key []string) error
 
 	// GetKeysFunc should return all keys in Redis matching the given pattern. If not set then ClearAll() for this dataloader will not be supported.
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
@@ -255,7 +259,7 @@ func (l *UserFloatLoader) LoadThunk(key float64) (*User, func() (*User, error)) 
 		v, err := l.redisConfig.GetFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64))
 		if err == nil {
 			// found in Redis, attempt to return value
-			if v == "" {
+			if v == "" || v == "null" {
 				// key found, empty value, return nil
 				return nil, nil
 			}
@@ -507,8 +511,12 @@ func (l *UserFloatLoader) ClearAll() {
 			// get all keys from Redis
 			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+"*")
 			// delete all these keys from Redis
-			for _, key := range keys {
-				l.redisConfig.DeleteFunc(context.Background(), key)
+			if l.redisConfig.DeleteManyFunc != nil {
+				l.redisConfig.DeleteManyFunc(context.Background(), keys)
+			} else {
+				for _, key := range keys {
+					l.redisConfig.DeleteFunc(context.Background(), key)
+				}
 			}
 		}
 		return

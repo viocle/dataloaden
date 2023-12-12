@@ -196,10 +196,10 @@ func LoadThunkMissReturnType(t string) string {
 func LoadThunkMarshalType(t string) string {
 	if strings.HasPrefix(t, "*") {
 		// pointer type
-		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nret := &%s{}\nif err := json.Unmarshal([]byte(v), ret); err == nil {\nreturn ret, nil\n}", t[1:])
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nret := &%s{}\nif err := json.Unmarshal([]byte(v), ret); err == nil {\nreturn ret, nil\n}", t[1:])
 	} else if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
 		// slice/map type
-		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nvar ret %s\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t)
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nvar ret %s\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t)
 	}
 	switch t {
 	case "string":
@@ -210,7 +210,7 @@ func LoadThunkMarshalType(t string) string {
 		return "ret, err := strconv.ParseBool(v)\nif err == nil {\n\treturn ret, nil\n}"
 	default:
 		// probably a struct by value. Try to unmarshal from json
-		return fmt.Sprintf("if v == \"\" {\n// key found, empty value, return empty value\nreturn %s{}, nil\n}\nret := %s{}\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t, t)
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return empty value\nreturn %s{}, nil\n}\nret := %s{}\nif err := json.Unmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t, t)
 	}
 }
 

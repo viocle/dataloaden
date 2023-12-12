@@ -22,13 +22,13 @@ type UserByIDAndOrg struct {
 	OrgID string `json:"oid"`
 }
 
-// NewLoader will collect user requests for 2 milliseconds and send them as a single batch to the fetch func
+// NewUserLoaderExample will collect user requests for 2 milliseconds and send them as a single batch to the fetch func
 // normally fetch would be a database call.
-func NewLoader() *UserLoader {
-	return &UserLoader{
-		wait:     2 * time.Millisecond,
-		maxBatch: 100,
-		fetch: func(keys []string) ([]*User, []error) {
+func NewUserLoaderExample() *UserLoader {
+	return NewUserLoader(UserLoaderConfig{
+		Wait:     2 * time.Millisecond,
+		MaxBatch: 100,
+		Fetch: func(keys []string) ([]*User, []error) {
 			users := make([]*User, len(keys))
 			errors := make([]error, len(keys))
 
@@ -37,5 +37,5 @@ func NewLoader() *UserLoader {
 			}
 			return users, errors
 		},
-	}
+	})
 }
