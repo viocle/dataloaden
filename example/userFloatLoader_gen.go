@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	UserFloatLoaderCacheKeyPrefix = "DataLoaderUserFloatLoader_"
+	UserFloatLoaderCacheKeyPrefix = "DataLoaderUserFloatLoader|"
 )
 
 // UserFloatLoaderConfig captures the config to create a new UserFloatLoader
@@ -106,12 +106,35 @@ func NewUserFloatLoader(config UserFloatLoaderConfig) *UserFloatLoader {
 		if l.redisConfig.GetFunc != nil && l.redisConfig.SetFunc != nil && l.redisConfig.DeleteFunc != nil {
 			// all required Redis functions are present, enable Redis
 			l.redisConfig = &UserFloatLoaderRedisConfig{
-				SetTTL:         config.RedisConfig.SetTTL, // optional
-				GetFunc:        config.RedisConfig.GetFunc,
-				SetFunc:        config.RedisConfig.SetFunc,
-				DeleteFunc:     config.RedisConfig.DeleteFunc,
-				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // optional
+				SetTTL:          config.RedisConfig.SetTTL, // optional
+				GetFunc:         config.RedisConfig.GetFunc,
+				SetFunc:         config.RedisConfig.SetFunc,
+				DeleteFunc:      config.RedisConfig.DeleteFunc,
+				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // optional
+				ObjMarshal:      config.RedisConfig.ObjMarshal,      // optional
+				ObjUnmarshal:    config.RedisConfig.ObjUnmarshal,    // optional
+				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional
 			}
+			if l.redisConfig.ObjMarshal == nil || l.redisConfig.ObjUnmarshal == nil {
+				// missing ObjMarshal or ObjUnmarshal, force use of json package
+				l.redisConfig.ObjMarshal = json.Marshal
+				l.redisConfig.ObjUnmarshal = json.Unmarshal
+			}
+			// set batchResultSet to just call the SetFunc directly, no locks needed
+			l.batchResultSet = func(key float64, value *User) {
+				l.redisConfig.SetFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64), value, l.redisConfig.SetTTL)
+			}
+			if l.redisConfig.KeyToStringFunc == nil {
+				l.redisConfig.KeyToStringFunc = l.MarshalUserFloatLoaderToString
+			}
+		}
+	}
+	if l.redisConfig == nil {
+		// set the default batchResultSet
+		l.batchResultSet = func(key float64, value *User) {
+			l.mu.Lock()
+			l.unsafeSet(key, value)
+			l.mu.Unlock()
 		}
 	}
 	l.batchPool = sync.Pool{
@@ -142,6 +165,31 @@ type UserFloatLoaderRedisConfig struct {
 
 	// GetKeysFunc should return all keys in Redis matching the given pattern. If not set then ClearAll() for this dataloader will not be supported.
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
+
+	// ObjMarshal provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
+	ObjMarshal func(any) ([]byte, error)
+
+	// ObjUnmarshaler provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
+	ObjUnmarshal func([]byte, any) error
+
+	// KeyToStringFunc provides you the ability to specify your own function to convert a key to a string, which will be used instead of serialization.
+	// This is only used for non standard types that need to be serialized. If not set, the ObjMarshal function (user defined or default) will be used to serialize a key into a string value
+	// Example: If you have a struct with a String() function that returns a string representation of the struct, you can set this function to that function.
+	//
+	// type MyStruct struct {
+	//     ID string
+	//     OrgID string
+	// }
+	// ...
+	// UserFloatLoaderRedisConfig{
+	//		KeyToStringFunc = func(key float64) string { return m.ID + ":" + m.OrgID }
+	// }
+	// ...
+	// Or if your key type has a String() function that returns a string representation of the key, you can set this function like this:
+	// UserFloatLoaderRedisConfig{
+	//		KeyToStringFunc = func(key float64) string { return key.String() }
+	// }
+	KeyToStringFunc func(key float64) string
 }
 
 // UserFloatLoader batches and caches requests
@@ -161,6 +209,9 @@ type UserFloatLoader struct {
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
 	batch *userFloatLoaderBatch
+
+	// batchResultSet sets the batch result
+	batchResultSet func(float64, *User)
 
 	// how long to done before sending a batch
 	wait time.Duration
@@ -264,7 +315,7 @@ func (l *UserFloatLoader) LoadThunk(key float64) (*User, func() (*User, error)) 
 				return nil, nil
 			}
 			ret := &User{}
-			if err := json.Unmarshal([]byte(v), ret); err == nil {
+			if err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {
 				return ret, nil
 			}
 			// error unmarshalling, just add to batch
@@ -332,9 +383,7 @@ func (l *UserFloatLoader) LoadThunk(key float64) (*User, func() (*User, error)) 
 		}
 
 		if err == nil {
-			l.mu.Lock()
-			l.unsafeSet(key, data)
-			l.mu.Unlock()
+			l.batchResultSet(key, data)
 		}
 
 		return data, err
@@ -384,14 +433,19 @@ func (l *UserFloatLoader) LoadAllThunk(keys []float64) func() ([]*User, []error)
 	}
 }
 
+// redisPrime will set the key value pair in Redis
+func (l *UserFloatLoader) redisPrime(key float64, value *User) bool {
+	if err := l.redisConfig.SetFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64), value, l.redisConfig.SetTTL); err != nil {
+		return false
+	}
+	return true
+}
+
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *UserFloatLoader) unsafePrime(key float64, value *User, forceReplace bool) bool {
 	if l.redisConfig != nil {
 		// using Redis
-		if err := l.redisConfig.SetFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64), value, l.redisConfig.SetTTL); err != nil {
-			return false
-		}
-		return true
+		return l.redisPrime(key, value)
 	}
 	if l.hookExternalCacheSet != nil {
 		// make a copy when writing to the cache, its easy to pass a pointer in from a loop var
@@ -443,11 +497,18 @@ func (l *UserFloatLoader) PrimeMany(keys []float64, values []*User) []bool {
 		return make([]bool, len(keys))
 	}
 	ret := make([]bool, len(keys))
-	l.mu.Lock()
-	for i, key := range keys {
-		ret[i] = l.unsafePrime(key, values[i], false)
+	if l.redisConfig != nil {
+		// using Redis
+		for i, key := range keys {
+			ret[i] = l.redisPrime(key, values[i])
+		}
+	} else {
+		l.mu.Lock()
+		for i, key := range keys {
+			ret[i] = l.unsafePrime(key, values[i], false)
+		}
+		l.mu.Unlock()
 	}
-	l.mu.Unlock()
 	return ret
 }
 
@@ -455,18 +516,21 @@ func (l *UserFloatLoader) PrimeMany(keys []float64, values []*User) []bool {
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *UserFloatLoader) Prime(key float64, value *User) bool {
-	l.mu.Lock()
-	found := l.unsafePrime(key, value, false)
-	l.mu.Unlock()
-	return found
+	if l.redisConfig != nil {
+		// using Redis
+		return l.redisPrime(key, value)
+	} else {
+		l.mu.Lock()
+		found := l.unsafePrime(key, value, false)
+		l.mu.Unlock()
+		return found
+	}
 }
 
 // ForcePrime the cache with the provided key and value. If the key already exists, value is replaced
 // (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
 func (l *UserFloatLoader) ForcePrime(key float64, value *User) {
-	l.mu.Lock()
-	l.unsafePrime(key, value, true)
-	l.mu.Unlock()
+	l.batchResultSet(key, value)
 }
 
 // Clear the value at key from the cache, if it exists
@@ -575,7 +639,7 @@ func (l *UserFloatLoader) ClearExpired() {
 func (l *UserFloatLoader) unsafeSet(key float64, value *User) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.SetFunc(context.Background(), UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64), value, l.redisConfig.SetTTL)
+		l.redisPrime(key, value)
 		return
 	}
 	if l.hookExternalCacheSet != nil {
@@ -663,6 +727,6 @@ func (b *userFloatLoaderBatch) end(l *UserFloatLoader) {
 
 // MarshalUserFloatLoaderToString is a helper method to marshal a UserFloatLoader to a string
 func (l *UserFloatLoader) MarshalUserFloatLoaderToString(v float64) string {
-	ret, _ := json.Marshal(v)
+	ret, _ := l.redisConfig.ObjMarshal(v)
 	return string(ret)
 }

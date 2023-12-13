@@ -16,6 +16,8 @@ package {{.Package}}
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
     "sync"
     "time"
 
@@ -24,7 +26,7 @@ import (
 )
 
 const (
-	{{.Name}}CacheKeyPrefix = "DataLoader{{.Name}}_"
+	{{.Name}}CacheKeyPrefix = "DataLoader{{.Name}}|"
 )
 
 // {{.Name}}Config captures the config to create a new {{.Name}}
@@ -128,7 +130,30 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 				SetFunc: config.RedisConfig.SetFunc,
 				DeleteFunc: config.RedisConfig.DeleteFunc,
 				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // optional
+				ObjMarshal: config.RedisConfig.ObjMarshal, // optional
+				ObjUnmarshal: config.RedisConfig.ObjUnmarshal, // optional
+				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional
 			}
+			if l.redisConfig.ObjMarshal == nil || l.redisConfig.ObjUnmarshal == nil {
+				// missing ObjMarshal or ObjUnmarshal, force use of json package
+				l.redisConfig.ObjMarshal = json.Marshal
+				l.redisConfig.ObjUnmarshal = json.Unmarshal
+			}
+			// set batchResultSet to just call the SetFunc directly, no locks needed
+			l.batchResultSet = func(key {{.KeyType.String}}, value {{.ValType.String}}) {
+				l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL)
+			}
+			if l.redisConfig.KeyToStringFunc == nil {
+				l.redisConfig.KeyToStringFunc = l.Marshal{{.Name}}ToString
+			}
+		}
+	}
+	if l.redisConfig == nil {
+		// set the default batchResultSet
+		l.batchResultSet = func(key {{.KeyType.String}}, value {{.ValType.String}}) {
+			l.mu.Lock()
+			l.unsafeSet(key, value)
+			l.mu.Unlock()
 		}
 	}
 	l.batchPool = sync.Pool{
@@ -159,6 +184,31 @@ type {{.Name}}RedisConfig struct {
 
 	// GetKeysFunc should return all keys in Redis matching the given pattern. If not set then ClearAll() for this dataloader will not be supported.
 	GetKeysFunc func(ctx context.Context, pattern string) ([]string, error)
+
+	// ObjMarshal provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
+	ObjMarshal func(any) ([]byte, error)
+
+	// ObjUnmarshaler provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
+	ObjUnmarshal func([]byte, any) error
+
+	// KeyToStringFunc provides you the ability to specify your own function to convert a key to a string, which will be used instead of serialization.
+	// This is only used for non standard types that need to be serialized. If not set, the ObjMarshal function (user defined or default) will be used to serialize a key into a string value
+	// Example: If you have a struct with a String() function that returns a string representation of the struct, you can set this function to that function.
+	//
+	// type MyStruct struct {
+	//     ID string
+	//     OrgID string
+	// }
+	// ...
+	// {{.Name}}RedisConfig{
+	//		KeyToStringFunc = func(key {{.KeyType.String}}) string { return m.ID + ":" + m.OrgID }
+	// }
+	// ...
+	// Or if your key type has a String() function that returns a string representation of the key, you can set this function like this:
+	// {{.Name}}RedisConfig{
+	//		KeyToStringFunc = func(key {{.KeyType.String}}) string { return key.String() }
+	// }
+	KeyToStringFunc func(key {{.KeyType.String}}) string
 }
 
 // {{.Name}} batches and caches requests          
@@ -178,6 +228,9 @@ type {{.Name}} struct {
 	// the current batch. keys will continue to be collected until timeout is hit,
 	// then everything will be sent to the fetch method and out to the listeners
 	batch *{{.Name|lcFirst}}Batch
+	
+	// batchResultSet sets the batch result
+	batchResultSet func({{.KeyType.String}}, {{.ValType.String}})
 
 	// how long to done before sending a batch
 	wait time.Duration
@@ -353,9 +406,7 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 		}
 
 		if err == nil {
-			l.mu.Lock()
-			l.unsafeSet(key, data)
-			l.mu.Unlock()
+			l.batchResultSet(key, data)
 		}
 
 		return data, err
@@ -405,14 +456,19 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 	}
 }
 
+// redisPrime will set the key value pair in Redis
+func (l *{{.Name}}) redisPrime(key {{.KeyType}}, value {{.ValType.String}}) bool {
+	if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL); err != nil {
+		return false
+	}
+	return true
+}
+
 // unsafePrime will prime the cache with the given key and value if the key does not exist. This method is not thread safe.
 func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}, forceReplace bool) bool {
 	if l.redisConfig != nil {
 		// using Redis
-		if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL); err != nil {
-			return false
-		}
-		return true
+		return l.redisPrime(key, value)
 	}
 	if l.hookExternalCacheSet != nil {
 		{{- if .ValType.IsPtr }}
@@ -498,11 +554,18 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 		return make([]bool, len(keys))
 	}
 	ret := make([]bool, len(keys))
-	l.mu.Lock()
-	for i, key := range keys {
-		ret[i] = l.unsafePrime(key, values[i], false)
+	if l.redisConfig != nil {
+		// using Redis
+		for i, key := range keys {
+			ret[i] = l.redisPrime(key, values[i])
+		}
+	} else {
+		l.mu.Lock()
+		for i, key := range keys {
+			ret[i] = l.unsafePrime(key, values[i], false)
+		}
+		l.mu.Unlock()
 	}
-	l.mu.Unlock()
 	return ret
 }
 
@@ -510,18 +573,21 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 // and false is returned.
 // (To forcefully prime the cache, clear the key first with loader.clear(key).prime(key, value).)
 func (l *{{.Name}}) Prime(key {{.KeyType}}, value {{.ValType.String}}) bool {
-	l.mu.Lock()
-	found := l.unsafePrime(key, value, false)
-	l.mu.Unlock()
-	return found
+	if l.redisConfig != nil {
+		// using Redis
+		return l.redisPrime(key, value)
+	} else {
+		l.mu.Lock()
+		found := l.unsafePrime(key, value, false)
+		l.mu.Unlock()
+		return found
+	}
 }
 
 // ForcePrime the cache with the provided key and value. If the key already exists, value is replaced
 // (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
 func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
-	l.mu.Lock()
-	l.unsafePrime(key, value, true)
-	l.mu.Unlock()
+	l.batchResultSet(key, value)
 }
 
 // Clear the value at key from the cache, if it exists
@@ -633,7 +699,7 @@ func (l *{{.Name}}) ClearExpired() {
 func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL)
+		l.redisPrime(key, value)
 		return
 	}
 	if l.hookExternalCacheSet != nil {
@@ -721,7 +787,7 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 
 // Marshal{{.Name}}ToString is a helper method to marshal a {{.Name}} to a string
 func (l *{{.Name}}) Marshal{{.Name}}ToString(v {{.KeyType.String}}) string {
-	ret, _ := json.Marshal(v)
+	ret, _ := l.redisConfig.ObjMarshal(v)
 	return string(ret)
 }
 `))
