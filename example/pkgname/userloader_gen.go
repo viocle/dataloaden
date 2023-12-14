@@ -451,14 +451,18 @@ func (l *UserLoader) LoadAll(keys []string) ([]*example.User, []error) {
 						thunks[i] = thunk
 					}
 				} else {
-					v := vS[i]
-					if v == "" || v == "null" {
+					if vS[i] == "" || vS[i] == "null" {
 						// key found, empty value, return nil
 						retVals[i] = nil
 					}
 					ret := &example.User{}
-					if err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {
+					if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), ret); err == nil {
 						retVals[i] = ret
+					} else {
+						l.mu.Lock()
+						if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+							thunks[i] = thunk
+						}
 					}
 				}
 			}

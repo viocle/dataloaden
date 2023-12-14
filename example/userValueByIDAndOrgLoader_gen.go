@@ -409,14 +409,18 @@ func (l *UserValueByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]User, []er
 						thunks[i] = thunk
 					}
 				} else {
-					v := vS[i]
-					if v == "" || v == "null" {
+					if vS[i] == "" || vS[i] == "null" {
 						// key found, empty value, set empty value
 						retVals[i] = User{}
 					}
 					ret := User{}
-					if err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {
+					if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {
 						retVals[i] = ret
+					} else {
+						l.mu.Lock()
+						if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+							thunks[i] = thunk
+						}
 					}
 				}
 			}

@@ -442,8 +442,7 @@ func (l *StringLoader) LoadAll(keys []string) ([]string, []error) {
 						thunks[i] = thunk
 					}
 				} else {
-					v := vS[i]
-					retVals[i] = v
+					retVals[i] = vS[i]
 				}
 			}
 		}

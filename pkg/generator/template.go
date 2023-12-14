@@ -474,7 +474,6 @@ func (l *{{.Name}}) LoadAll(keys []{{.KeyType}}) ([]{{.ValType.String}}, []error
 						thunks[i] = thunk
 					}
 				} else {
-					v := vS[i]
 					{{.ValType.String|LoadAllMarshalType}}
 				}
 			}
