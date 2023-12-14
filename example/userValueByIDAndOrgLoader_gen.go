@@ -56,6 +56,9 @@ type UserValueByIDAndOrgLoaderConfig struct {
 	// HookAfterSet is called after a value is set in the cache
 	HookAfterSet func(key UserByIDAndOrg, value User)
 
+	// HookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	HookAfterPrime func(key UserByIDAndOrg, value User)
+
 	// HookAfterClear is called after a value is cleared from the cache
 	HookAfterClear func(key UserByIDAndOrg)
 
@@ -82,6 +85,7 @@ func NewUserValueByIDAndOrgLoader(config UserValueByIDAndOrgLoaderConfig) *UserV
 		hookBeforeFetch:           config.HookBeforeFetch,
 		hookAfterFetch:            config.HookAfterFetch,
 		hookAfterSet:              config.HookAfterSet,
+		hookAfterPrime:            config.HookAfterPrime,
 		hookAfterClear:            config.HookAfterClear,
 		hookAfterClearAll:         config.HookAfterClearAll,
 		hookAfterExpired:          config.HookAfterExpired,
@@ -138,7 +142,7 @@ type UserValueByIDAndOrgLoaderRedisConfig struct {
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
-	// GetFunc should get a value from Redis given a key and return the raw string value
+	// GetFunc should get a value from Redis given a key and return the raw string value.
 	GetFunc func(ctx context.Context, key string) (string, error)
 
 	// GetManyFunc should get one or more values from Redis given a set of keys and return the raw string values, errors the size of keys with non nil values for keys not found, and an error if any other error occurred running the command
@@ -227,22 +231,25 @@ type UserValueByIDAndOrgLoader struct {
 	// hookExternalCacheClearAll is a method that provides the ability to clear all keys in an external cache with an external hook.
 	hookExternalCacheClearAll func() error
 
-	// HookBeforeFetch is called right before a fetch is performed
+	// hookBeforeFetch is called right before a fetch is performed
 	hookBeforeFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// HookAfterFetch is called right after a fetch is performed
+	// hookAfterFetch is called right after a fetch is performed
 	hookAfterFetch func(keys []UserByIDAndOrg, loaderName string)
 
-	// HookAfterSet is called after a value is primed in the cache
+	// hookAfterSet is called after a value is set in the cache
 	hookAfterSet func(key UserByIDAndOrg, value User)
 
-	// HookAfterClear is called after a value is cleared from the cache
+	// hookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	hookAfterPrime func(key UserByIDAndOrg, value User)
+
+	// hookAfterClear is called after a value is cleared from the cache
 	hookAfterClear func(key UserByIDAndOrg)
 
-	// HookAfterClearAll is called after all values are cleared from the cache
+	// hookAfterClearAll is called after all values are cleared from the cache
 	hookAfterClearAll func()
 
-	// HookAfterExpired is called after a value is cleared in the cache due to expiration
+	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key UserByIDAndOrg)
 
 	// pool of batches
@@ -519,11 +526,18 @@ func (l *UserValueByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []Us
 func (l *UserValueByIDAndOrgLoader) Prime(key UserByIDAndOrg, value User) bool {
 	if l.redisConfig != nil {
 		// using Redis
-		return l.redisPrime(key, value)
+		b := l.redisPrime(key, value)
+		if l.hookAfterPrime != nil {
+			l.hookAfterPrime(key, value)
+		}
+		return b
 	} else {
 		l.mu.Lock()
 		found := l.unsafePrime(key, value, false)
 		l.mu.Unlock()
+		if l.hookAfterPrime != nil {
+			l.hookAfterPrime(key, value)
+		}
 		return found
 	}
 }
@@ -532,6 +546,9 @@ func (l *UserValueByIDAndOrgLoader) Prime(key UserByIDAndOrg, value User) bool {
 // (This removes the requirement to clear the key first with loader.clear(key).prime(key, value))
 func (l *UserValueByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value User) {
 	l.batchResultSet(key, value)
+	if l.hookAfterPrime != nil {
+		l.hookAfterPrime(key, value)
+	}
 }
 
 // Clear the value at key from the cache, if it exists
