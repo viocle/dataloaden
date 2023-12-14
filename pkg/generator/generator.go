@@ -214,6 +214,28 @@ func LoadThunkMarshalType(t string) string {
 	}
 }
 
+// LoadAllMarshalType returns the code to handle marshaling the given type from a string in LoadAll
+func LoadAllMarshalType(t string) string {
+	if strings.HasPrefix(t, "*") {
+		// pointer type
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n}\nret := &%s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {\nretVals[i] = ret\n}", t[1:])
+	} else if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
+		// slice/map type
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n} else {\nvar ret %s\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nretVals[i] = nil\n}\n}", t)
+	}
+	switch t {
+	case "string":
+		return "retVals[i] = v"
+	case "int", "int8", "int16", "int32", "rune", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128", "byte":
+		return fmt.Sprintf("ret, err := strconv.Parse%s(v, 10, 64)\nif err == nil {\n\tretVals[i] = %s(ret)\n}", strconvParseType(t), t)
+	case "bool":
+		return "ret, err := strconv.ParseBool(v)\nif err == nil {\n\tretVals[i] = ret\n}"
+	default:
+		// probably a struct by value. Try to unmarshal from json
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, set empty value\nretVals[i] = %s{}\n}\nret := %s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nretVals[i] = ret\n}", t, t)
+	}
+}
+
 // strconvParseType returns the type to use in strconv.Parse* for the given type
 func strconvParseType(t string) string {
 	switch t {

@@ -7,6 +7,7 @@ var tpl = template.Must(template.New("generated").
 		"lcFirst":                 lcFirst,
 		"loadThunkMissReturnType": LoadThunkMissReturnType,
 		"LoadThunkMarshalType":    LoadThunkMarshalType,
+		"LoadAllMarshalType":      LoadAllMarshalType,
 		"ToRedisKey":              ToRedisKey,
 	}).
 	Parse(`
@@ -26,7 +27,11 @@ import (
 )
 
 const (
-	{{.Name}}CacheKeyPrefix = "DataLoader{{.Name}}|"
+	{{.Name}}CacheKeyPrefix = "{DataLoader{{.Name}}}:"
+)
+
+var (
+	Err{{.Name}}GetManyLength = errors.New("redis error, invalid length returned from GetManyFunc")
 )
 
 // {{.Name}}Config captures the config to create a new {{.Name}}
@@ -126,13 +131,14 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 			// all required Redis functions are present, enable Redis
 			l.redisConfig = &{{.Name}}RedisConfig{
 				SetTTL: config.RedisConfig.SetTTL, // optional
-				GetFunc: config.RedisConfig.GetFunc,
-				SetFunc: config.RedisConfig.SetFunc,
-				DeleteFunc: config.RedisConfig.DeleteFunc,
-				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // optional
+				GetFunc: config.RedisConfig.GetFunc, // (GET)
+				GetManyFunc: config.RedisConfig.GetManyFunc, // (MGET) optional, but recommended for LoadAll performance
+				SetFunc: config.RedisConfig.SetFunc, // (SET)
+				DeleteFunc: config.RedisConfig.DeleteFunc, // (DEL)
+				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // (DEL) optional, but recommened for ClearAll performance
 				ObjMarshal: config.RedisConfig.ObjMarshal, // optional
 				ObjUnmarshal: config.RedisConfig.ObjUnmarshal, // optional
-				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional
+				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional, but recommended for complex types that need to be serialized
 			}
 			if l.redisConfig.ObjMarshal == nil || l.redisConfig.ObjUnmarshal == nil {
 				// missing ObjMarshal or ObjUnmarshal, force use of json package
@@ -170,8 +176,12 @@ type {{.Name}}RedisConfig struct {
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
-	// GetFunc should get a value from Redis given a key and return the raw string value
+	// GetFunc should get a value from Redis given a key and return the raw string value.
 	GetFunc func(ctx context.Context, key string) (string, error)
+
+	// GetManyFunc should get one or more values from Redis given a set of keys and return the raw string values, errors the size of keys with non nil values for keys not found, and an error if any other error occurred running the command
+	// If not set then GetFunc will be used instead, but will be called one at a time for each key
+	GetManyFunc func(ctx context.Context, keys []string) ([]string, []error, error)
 
 	// SetFunc should set a value in Redis given a key and value with an optional ttl (Time To Live)
 	SetFunc func(ctx context.Context, key string, value interface{}, ttl *time.Duration) error
@@ -385,6 +395,11 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 		{{ end }}
 		}
 	}
+	return l.addToBatchUnsafe(key)
+}
+
+// addToBatchUnsafe adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.unsafeBatchSet() and l.mu.lock() to have been called prior to calling this method.
+func (l *{{.Name}}) addToBatchUnsafe(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -416,27 +431,68 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
 // sub batches depending on how the loader is configured
 func (l *{{.Name}}) LoadAll(keys []{{.KeyType}}) ([]{{.ValType.String}}, []error) {
-	{{.ValType.Name|lcFirst}}s := make([]{{.ValType.String}}, len(keys))
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	retVals := make([]{{.ValType.String}}, len(keys))
 	thunks := make(map[int]func() ({{.ValType.String}}, error), len(keys))
 	errors := make([]error, len(keys))
 
-	for i, key := range keys {
-		if v, thunk :=  l.LoadThunk(key); thunk != nil {
-			thunks[i] = thunk
+	if l.redisConfig != nil && l.redisConfig.GetManyFunc != nil {
+		// using Redis and GetManyFunc is set
+		rKeys := make([]string, len(keys))
+		for idx, key := range keys {
+			rKeys[idx] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String .Name .KeyType }}
+		}
+		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
+		if err != nil {
+			// return errors for all keys
+			for i := range errors {
+				errors[i] = err
+			}
+			return retVals, errors
+		} else if len(vS) != len(keys) || len(errs) != len(keys) {
+			// return errors for all keys, invalid lengths returned
+			for i := range errors {
+				errors[i] = Err{{.Name}}GetManyLength
+			}
 		} else {
-			{{.ValType.Name|lcFirst}}s[i] = v
+			l.mu.Lock()
+			l.unsafeBatchSet()
+			l.mu.Unlock()
+			for i, err := range errs {
+				if err != nil {
+					l.mu.Lock()
+					if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+						thunks[i] = thunk
+					}
+				} else {
+					v := vS[i]
+					{{.ValType.String|LoadAllMarshalType}}
+				}
+			}
+		}
+	} else {
+		// not using Redis or GetManyFunc is not set
+		for i, key := range keys {
+			if v, thunk :=  l.LoadThunk(key); thunk != nil {
+				thunks[i] = thunk
+			} else {
+				retVals[i] = v
+			}
 		}
 	}
 	for i, thunk := range thunks {
-		{{.ValType.Name|lcFirst}}s[i], errors[i] = thunk()
+		retVals[i], errors[i] = thunk()
 	}
 
-	return {{.ValType.Name|lcFirst}}s, errors
+	return retVals, errors
 }
 
 // LoadAllThunk returns a function that when called will block waiting for a {{.ValType.Name}}s.
 // This method should be used if you want one goroutine to make requests to many
 // different data loaders without blocking until the thunk is called.
+// TODO: Add support for Redis GetManyFunc
 func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.String}}, []error)) {
 	thunks := make(map[int]func() ({{.ValType.String}}, error), len(keys))
 	{{.ValType.Name|lcFirst}}s := make([]{{.ValType.String}}, len(keys))
@@ -460,6 +516,8 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 func (l *{{.Name}}) redisPrime(key {{.KeyType}}, value {{.ValType.String}}) bool {
 	if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL); err != nil {
 		return false
+	} else if l.hookAfterSet != nil {
+		l.hookAfterSet(key, value)
 	}
 	return true
 }
@@ -595,6 +653,9 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 	if l.redisConfig != nil {
 		// using Redis
 		l.redisConfig.DeleteFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }})
+		if l.hookAfterClear != nil {
+			l.hookAfterClear(key)
+		}
 		return
 	}
 	if l.hookExternalCacheDelete != nil {
@@ -638,6 +699,9 @@ func (l *{{.Name}}) ClearAll() {
 				for _, key := range keys {
 					l.redisConfig.DeleteFunc(context.Background(), key)
 				}
+			}
+			if l.hookAfterClearAll != nil {
+				l.hookAfterClearAll()
 			}
 		}
 		return
