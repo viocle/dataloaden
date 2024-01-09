@@ -328,7 +328,6 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 		}
 		// not found in Redis or error, continue
 		l.mu.Lock()
-		l.unsafeBatchSet()
 	} else {
 		if l.hookExternalCacheGet != nil {
 			if v, ok := l.hookExternalCacheGet(key); ok {
@@ -336,7 +335,6 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 			}
 			// not found in external cache, continue
 			l.mu.Lock()
-			l.unsafeBatchSet()
 		} else {
 			l.mu.Lock()
 
@@ -346,15 +344,15 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 					return it, nil
 				}
 			}
-			l.unsafeBatchSet()
 
 		}
 	}
-	return l.addToBatchUnsafe(key)
+	return l.unsafeAddToBatch(key)
 }
 
-// addToBatchUnsafe adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.unsafeBatchSet() and l.mu.lock() to have been called prior to calling this method.
-func (l *UserByIDAndOrgLoader) addToBatchUnsafe(key UserByIDAndOrg) (*User, func() (*User, error)) {
+// unsafeAddToBatch adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.lock() to have been called prior to calling this method.
+func (l *UserByIDAndOrgLoader) unsafeAddToBatch(key UserByIDAndOrg) (*User, func() (*User, error)) {
+	l.unsafeBatchSet()
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -402,13 +400,10 @@ func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error)
 				errors[i] = ErrUserByIDAndOrgLoaderGetManyLength
 			}
 		} else {
-			l.mu.Lock()
-			l.unsafeBatchSet()
-			l.mu.Unlock()
 			for i, err := range errs {
 				if err != nil {
 					l.mu.Lock()
-					if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+					if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 						thunks[i] = thunk
 					}
 				} else {
@@ -421,7 +416,7 @@ func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error)
 						retVals[i] = ret
 					} else {
 						l.mu.Lock()
-						if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+						if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 							thunks[i] = thunk
 						}
 					}

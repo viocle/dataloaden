@@ -367,7 +367,6 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 		}
 		// not found in Redis or error, continue
 		l.mu.Lock()
-		l.unsafeBatchSet()
 	} else {
 		if l.hookExternalCacheGet != nil {
 			if v, ok := l.hookExternalCacheGet(key); ok {
@@ -375,7 +374,6 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 			}
 			// not found in external cache, continue
 			l.mu.Lock()
-			l.unsafeBatchSet()
 		} else {
 			l.mu.Lock()
 			{{ if not .DisableCacheExpiration }}
@@ -385,7 +383,6 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 					l.mu.Unlock()
 					return it, nil
 				}
-				l.unsafeBatchSet()
 			} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
 				// using cache expiration
 				l.unsafeBatchSet()
@@ -400,26 +397,23 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 						l.hookAfterExpired(key)
 					}
 				}
-			} else {
-				// no cache
-				l.unsafeBatchSet()
 			}
-		{{ else }}
-		if len(l.cache) > 0 {
-			if it, ok := l.cache[key]; ok {
-				l.mu.Unlock()
-				return it, nil
+			{{ else }}
+			if len(l.cache) > 0 {
+				if it, ok := l.cache[key]; ok {
+					l.mu.Unlock()
+					return it, nil
+				}
 			}
-		}
-		l.unsafeBatchSet()
-		{{ end }}
+			{{ end }}
 		}
 	}
-	return l.addToBatchUnsafe(key)
+	return l.unsafeAddToBatch(key)
 }
 
-// addToBatchUnsafe adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.unsafeBatchSet() and l.mu.lock() to have been called prior to calling this method.
-func (l *{{.Name}}) addToBatchUnsafe(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
+// unsafeAddToBatch adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.lock() to have been called prior to calling this method.
+func (l *{{.Name}}) unsafeAddToBatch(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
+	l.unsafeBatchSet()
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -467,13 +461,10 @@ func (l *{{.Name}}) LoadAll(keys []{{.KeyType}}) ([]{{.ValType.String}}, []error
 				errors[i] = Err{{.Name}}GetManyLength
 			}
 		} else {
-			l.mu.Lock()
-			l.unsafeBatchSet()
-			l.mu.Unlock()
 			for i, err := range errs {
 				if err != nil {
 					l.mu.Lock()
-					if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+					if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 						thunks[i] = thunk
 					}
 				} else {

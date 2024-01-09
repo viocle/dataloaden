@@ -350,7 +350,6 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 		}
 		// not found in Redis or error, continue
 		l.mu.Lock()
-		l.unsafeBatchSet()
 	} else {
 		if l.hookExternalCacheGet != nil {
 			if v, ok := l.hookExternalCacheGet(key); ok {
@@ -358,7 +357,6 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 			}
 			// not found in external cache, continue
 			l.mu.Lock()
-			l.unsafeBatchSet()
 		} else {
 			l.mu.Lock()
 
@@ -368,7 +366,6 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 					l.mu.Unlock()
 					return it, nil
 				}
-				l.unsafeBatchSet()
 			} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
 				// using cache expiration
 				l.unsafeBatchSet()
@@ -383,18 +380,16 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 						l.hookAfterExpired(key)
 					}
 				}
-			} else {
-				// no cache
-				l.unsafeBatchSet()
 			}
 
 		}
 	}
-	return l.addToBatchUnsafe(key)
+	return l.unsafeAddToBatch(key)
 }
 
-// addToBatchUnsafe adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.unsafeBatchSet() and l.mu.lock() to have been called prior to calling this method.
-func (l *UserLoader) addToBatchUnsafe(key string) (*User, func() (*User, error)) {
+// unsafeAddToBatch adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.lock() to have been called prior to calling this method.
+func (l *UserLoader) unsafeAddToBatch(key string) (*User, func() (*User, error)) {
+	l.unsafeBatchSet()
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
 	l.mu.Unlock()
@@ -442,13 +437,10 @@ func (l *UserLoader) LoadAll(keys []string) ([]*User, []error) {
 				errors[i] = ErrUserLoaderGetManyLength
 			}
 		} else {
-			l.mu.Lock()
-			l.unsafeBatchSet()
-			l.mu.Unlock()
 			for i, err := range errs {
 				if err != nil {
 					l.mu.Lock()
-					if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+					if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 						thunks[i] = thunk
 					}
 				} else {
@@ -461,7 +453,7 @@ func (l *UserLoader) LoadAll(keys []string) ([]*User, []error) {
 						retVals[i] = ret
 					} else {
 						l.mu.Lock()
-						if _, thunk := l.addToBatchUnsafe(keys[i]); thunk != nil {
+						if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 							thunks[i] = thunk
 						}
 					}
