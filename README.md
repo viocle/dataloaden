@@ -192,18 +192,18 @@ goos: windows
 goarch: amd64
 pkg: github.com/viocle/dataloaden/example
 cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       27329870              45.69 ns/op            10 B/op          0 allocs/op
-BenchmarkLoader/random_spread-24                 2884179              607.2 ns/op           409 B/op          4 allocs/op
-BenchmarkLoader/concurently-24                       100           15407862 ns/op         12535 B/op         52 allocs/op
-BenchmarkLoaderStruct/caches-24                 19607616              57.86 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/random_spread-24          17773827              57.79 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/concurently-24              922983               1204 ns/op            21 B/op          6 allocs/op
-BenchmarkLoaderExpires/caches-24                26055859              46.25 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExpires/random_spread-24          2731736              662.7 ns/op           432 B/op          5 allocs/op
-BenchmarkLoaderExpires/concurently-24                100           15380083 ns/op         12685 B/op         62 allocs/op
-BenchmarkLoaderExternalCache/caches-24          23076656              47.90 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExternalCache/random_spread-24    2800898              604.8 ns/op           413 B/op          4 allocs/op
-BenchmarkLoaderExternalCache/concurently-24          100           15287353 ns/op         12742 B/op         52 allocs/op
+BenchmarkLoader/caches-24                       27250312              44.55 ns/op            10 B/op          0 allocs/op
+BenchmarkLoader/random_spread-24                 2902282              600.2 ns/op           387 B/op          4 allocs/op
+BenchmarkLoader/concurrently-24                      100           14177922 ns/op          2808 B/op         46 allocs/op
+BenchmarkLoaderStruct/caches-24                 21124952              56.86 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/random_spread-24          20847738              56.86 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/concurrently-24            1000000               1090 ns/op            21 B/op          6 allocs/op
+BenchmarkLoaderExpires/caches-24                26666428              45.14 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExpires/random_spread-24          2787622              645.7 ns/op           407 B/op          5 allocs/op
+BenchmarkLoaderExpires/concurrently-24               100           14729930 ns/op          3067 B/op         56 allocs/op
+BenchmarkLoaderExternalCache/caches-24          24000540              46.44 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExternalCache/random_spread-24    2823822              612.3 ns/op           404 B/op          4 allocs/op
+BenchmarkLoaderExternalCache/concurrently-24         100           15002093 ns/op          2597 B/op         46 allocs/op
 PASS
 ok      github.com/viocle/dataloaden/example    19.834s
 
@@ -212,9 +212,9 @@ goos: windows
 goarch: amd64
 pkg: github.com/viocle/dataloaden/example/slice
 cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       28177306              39.53 ns/op            26 B/op          0 allocs/op
-BenchmarkLoader/random_spread-24                31447117              41.37 ns/op            26 B/op          0 allocs/op
-BenchmarkLoader/concurently-24                       589            1732780 ns/op            936 B/op         4 allocs/op
+BenchmarkSliceLoader/caches-24                  28080801              39.35 ns/op            25 B/op          0 allocs/op
+BenchmarkSliceLoader/random_spread-24           31927885              40.56 ns/op            26 B/op          0 allocs/op
+BenchmarkSliceLoader/concurrently-24                 757            1603486 ns/op           160 B/op          3 allocs/op
 PASS
 ok      github.com/viocle/dataloaden/example/slice      4.928s
 ```

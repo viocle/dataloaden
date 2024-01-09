@@ -67,7 +67,7 @@ func BenchmarkSliceLoader(b *testing.B) {
 		}
 	})
 
-	b.Run("concurently", func(b *testing.B) {
+	b.Run("concurrently", func(b *testing.B) {
 		var wg sync.WaitGroup
 		for i := 0; i < 10; i++ {
 			wg.Add(1)

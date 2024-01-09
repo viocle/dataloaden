@@ -283,13 +283,16 @@ type UserSliceLoader struct {
 }
 
 type userSliceLoaderBatch struct {
-	now     int64
-	done    chan struct{}
-	keysMap map[int]int
-	keys    []int
-	data    [][]example.User
-	errors  []error
-	closing bool
+	loader    *UserSliceLoader
+	now       int64
+	done      chan struct{}
+	keysMap   map[int]int
+	keys      []int
+	data      [][]example.User
+	errors    []error
+	closing   bool
+	lock      sync.Mutex
+	checkedIn int
 }
 
 // Load a User by key, batching and caching will be applied automatically
@@ -308,7 +311,7 @@ func (l *UserSliceLoader) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &userSliceLoaderBatch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
+		l.batch = &userSliceLoaderBatch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -317,7 +320,17 @@ func (l *UserSliceLoader) unsafeBatchSet() {
 
 // createNewBatch creates a new batch
 func (l *UserSliceLoader) createNewBatch() *userSliceLoaderBatch {
-	return &userSliceLoaderBatch{now: 0, done: make(chan struct{}), keysMap: make(map[int]int, l.maxBatch), keys: make([]int, 0, l.maxBatch), data: nil, errors: nil}
+	return &userSliceLoaderBatch{
+		loader:    l,
+		now:       0,
+		done:      make(chan struct{}),
+		keysMap:   make(map[int]int, l.maxBatch),
+		keys:      make([]int, 0, l.maxBatch),
+		data:      nil,
+		errors:    nil,
+		lock:      sync.Mutex{},
+		checkedIn: 0,
+	}
 }
 
 // LoadThunk returns a function that when called will block waiting for a User.
@@ -393,18 +406,8 @@ func (l *UserSliceLoader) addToBatchUnsafe(key int) ([]example.User, func() ([]e
 	return nil, func() ([]example.User, error) {
 		<-batch.done
 
-		var data []example.User
-		if pos < len(batch.data) {
-			data = batch.data[pos]
-		}
-
-		var err error
-		// its convenient to be able to return a single error for everything
-		if len(batch.errors) == 1 {
-			err = batch.errors[0]
-		} else if batch.errors != nil {
-			err = batch.errors[pos]
-		}
+		// batch has been closed, pull result
+		data, err := batch.getResult(pos)
 
 		if err == nil {
 			l.batchResultSet(key, data)
@@ -783,8 +786,10 @@ func (b *userSliceLoaderBatch) keyIndex(l *UserSliceLoader, key int) int {
 		go b.startTimer(l)
 	}
 
+	// have we reached out max batch size?
 	if l.maxBatch != 0 && pos >= l.maxBatch-1 {
 		if !b.closing {
+			// not already closing, close the batch and call end
 			b.closing = true
 			l.batch = nil
 			go b.end(l)
@@ -820,7 +825,39 @@ func (b *userSliceLoaderBatch) end(l *UserSliceLoader) {
 	if l.hookAfterFetch != nil {
 		l.hookAfterFetch(b.keys, "UserSliceLoader")
 	}
+	// close done channel to signal all thunks to unblock
 	close(b.done)
+}
+
+// getResult will return the result for the given position from the batch
+func (b *userSliceLoaderBatch) getResult(pos int) ([]example.User, error) {
+	var data []example.User
+	if pos < len(b.data) {
+		data = b.data[pos]
+	}
+
+	var err error
+	// its convenient to be able to return a single error for everything
+	if len(b.errors) == 1 {
+		err = b.errors[0]
+	} else if b.errors != nil {
+		err = b.errors[pos]
+	}
+
+	// check if all thunks have checked in and if so, return batch to pool
+	b.lock.Lock()
+	b.checkedIn++
+	if b.checkedIn >= len(b.data) {
+		b.checkedIn = 0
+		b.lock.Unlock()
+		// all thunks have checked in, return batch to pool for re-use
+		b.loader.batchPool.Put(b)
+	} else {
+		b.lock.Unlock()
+	}
+
+	// return data and error
+	return data, err
 }
 
 // MarshalUserSliceLoaderToString is a helper method to marshal a UserSliceLoader to a string

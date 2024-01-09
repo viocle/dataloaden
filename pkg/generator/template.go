@@ -302,6 +302,7 @@ type {{.Name}} struct {
 }
 
 type {{.Name|lcFirst}}Batch struct {
+	loader *{{.Name}}
 	now     int64
 	done    chan struct{}
 	keysMap map[{{.KeyType}}]int
@@ -309,6 +310,8 @@ type {{.Name|lcFirst}}Batch struct {
 	data    []{{.ValType.String}}
 	errors   []error
 	closing bool
+	lock sync.Mutex
+	checkedIn int
 }
 
 // Load a {{.ValType.Name}} by key, batching and caching will be applied automatically
@@ -327,7 +330,7 @@ func (l *{{.Name}}) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &{{.Name|lcFirst}}Batch{now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil}
+		l.batch = &{{.Name|lcFirst}}Batch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -336,7 +339,17 @@ func (l *{{.Name}}) unsafeBatchSet() {
 
 // createNewBatch creates a new batch
 func (l *{{.Name}}) createNewBatch() *{{.Name|lcFirst}}Batch {
-	return &{{.Name|lcFirst}}Batch{now: 0, done: make(chan struct{}), keysMap: make(map[{{.KeyType.String}}]int, l.maxBatch), keys: make([]{{.KeyType.String}}, 0, l.maxBatch), data: nil, errors: nil}
+	return &{{.Name|lcFirst}}Batch{
+		loader: l,
+		now: 0, 
+		done: make(chan struct{}), 
+		keysMap: make(map[{{.KeyType.String}}]int, l.maxBatch), 
+		keys: make([]{{.KeyType.String}}, 0, l.maxBatch), 
+		data: nil, 
+		errors: nil,
+		lock: sync.Mutex{},
+		checkedIn: 0,
+	}
 }
 
 // LoadThunk returns a function that when called will block waiting for a {{.ValType.Name}}.
@@ -414,19 +427,9 @@ func (l *{{.Name}}) addToBatchUnsafe(key {{.KeyType.String}}) ({{.ValType.String
 	return {{.ValType.String|loadThunkMissReturnType}}, func() ({{.ValType.String}}, error) {
 		<-batch.done
 
-		var data {{.ValType.String}}
-		if pos < len(batch.data) {
-			data = batch.data[pos]
-		}
-
-		var err error
-		// its convenient to be able to return a single error for everything
-		if len(batch.errors) == 1 {
-			err = batch.errors[0]
-		} else if batch.errors != nil {
-			err = batch.errors[pos]
-		}
-
+		// batch has been closed, pull result
+		data, err := batch.getResult(pos)
+		
 		if err == nil {
 			l.batchResultSet(key, data)
 		}
@@ -825,8 +828,10 @@ func (b *{{.Name|lcFirst}}Batch) keyIndex(l *{{.Name}}, key {{.KeyType}}) int {
 		go b.startTimer(l)
 	}
 
+	// have we reached out max batch size?
 	if l.maxBatch != 0 && pos >= l.maxBatch-1 {
 		if !b.closing {
+			// not already closing, close the batch and call end
 			b.closing = true
 			l.batch = nil
 			go b.end(l)
@@ -862,7 +867,39 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 	if l.hookAfterFetch != nil {
 		l.hookAfterFetch(b.keys, "{{.Name}}")
 	}
+	// close done channel to signal all thunks to unblock
 	close(b.done)
+}
+
+// getResult will return the result for the given position from the batch
+func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error) {
+	var data {{.ValType.String}}
+	if pos < len(b.data) {
+		data = b.data[pos]
+	}
+
+	var err error
+	// its convenient to be able to return a single error for everything
+	if len(b.errors) == 1 {
+		err = b.errors[0]
+	} else if b.errors != nil {
+		err = b.errors[pos]
+	}
+
+	// check if all thunks have checked in and if so, return batch to pool
+	b.lock.Lock()
+	b.checkedIn++
+	if b.checkedIn >= len(b.data) {
+		b.checkedIn = 0
+		b.lock.Unlock()
+		// all thunks have checked in, return batch to pool for re-use
+		b.loader.batchPool.Put(b)
+	} else {
+		b.lock.Unlock()
+	}
+
+	// return data and error
+	return data, err
 }
 
 // Marshal{{.Name}}ToString is a helper method to marshal a {{.Name}} to a string
