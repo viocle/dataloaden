@@ -151,7 +151,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 			}
 			// set batchResultSet to just call the SetFunc directly, no locks needed
 			l.batchResultSet = func(key {{.KeyType.String}}, value {{.ValType.String}}) {
-				l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL)
+				l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }}, value, l.redisConfig.SetTTL)
 			}
 			if l.redisConfig.KeyToStringFunc == nil {
 				l.redisConfig.KeyToStringFunc = l.Marshal{{.Name}}ToString
@@ -171,7 +171,6 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 
@@ -358,7 +357,7 @@ func (l *{{.Name}}) createNewBatch() *{{.Name|lcFirst}}Batch {
 func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
 	if l.redisConfig != nil {
 		// using Redis
-			v, err := l.redisConfig.GetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }})
+			v, err := l.redisConfig.GetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
 		if err == nil {
 			{{ if eq .KeyType.String "string" }}{{.ValType.String|LoadThunkMarshalType}}
 			{{else}}// found in Redis, attempt to return value
@@ -446,7 +445,7 @@ func (l *{{.Name}}) LoadAll(keys []{{.KeyType}}) ([]{{.ValType.String}}, []error
 		// using Redis and GetManyFunc is set
 		rKeys := make([]string, len(keys))
 		for idx, key := range keys {
-			rKeys[idx] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String .Name .KeyType }}
+			rKeys[idx] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String }}
 		}
 		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
 		if err != nil {
@@ -514,7 +513,7 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 
 // redisPrime will set the key value pair in Redis
 func (l *{{.Name}}) redisPrime(key {{.KeyType}}, value {{.ValType.String}}) bool {
-	if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }}, value, l.redisConfig.SetTTL); err != nil {
+	if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }}, value, l.redisConfig.SetTTL); err != nil {
 		return false
 	} else if l.hookAfterSet != nil {
 		l.hookAfterSet(key, value)
@@ -662,7 +661,7 @@ func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
 func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.DeleteFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String .Name .KeyType }})
+		l.redisConfig.DeleteFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
 		if l.hookAfterClear != nil {
 			l.hookAfterClear(key)
 		}

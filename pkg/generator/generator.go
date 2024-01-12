@@ -267,7 +267,7 @@ func IsStructType(t string) bool {
 }
 
 // ToRedisKey returns the code to convert the given key to a string for use as a redis key
-func ToRedisKey(t, name string, keyType interface{}) string {
+func ToRedisKey(t string) string {
 	if t == "string" {
 		// no conversion needed, use directly
 		return "key"

@@ -151,7 +151,6 @@ func NewStringLoader(config StringLoaderConfig) *StringLoader {
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 

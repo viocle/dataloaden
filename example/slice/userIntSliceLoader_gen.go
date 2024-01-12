@@ -154,7 +154,6 @@ func NewUserIntSliceLoader(config UserIntSliceLoaderConfig) *UserIntSliceLoader 
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 

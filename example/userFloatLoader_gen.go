@@ -152,7 +152,6 @@ func NewUserFloatLoader(config UserFloatLoaderConfig) *UserFloatLoader {
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 

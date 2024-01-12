@@ -153,7 +153,6 @@ func NewUserLoader(config UserLoaderConfig) *UserLoader {
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 

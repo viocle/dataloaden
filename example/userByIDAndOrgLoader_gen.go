@@ -133,7 +133,6 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 			return l.createNewBatch()
 		},
 	}
-	l.unsafeBatchSet()
 	return l
 }
 
