@@ -182,6 +182,132 @@ d.`HookAfterExpired`: When a key is cleared because it has expired, this functio
 e. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
 f. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
 g. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
+13. Redis support. See Redis Support section below for more details.
+
+#### Redis Support
+
+You can use Redis as the cache storage for your dataloader by configuring the RedisConfig value when creating a new instance of a dataloader. Below are the configuration values available and how they're used.
+
+1. `SetTTL` (Optional) Is the KEEPTTL value used in the SET command. This value is passed back to your SetFunc value when being called.
+2. `GetFunc` (Required) Is your function to perform a `GET` command.
+3. `GetManyFunc` (Optional) Is your function to perform a `MGET` command wich can retrieve multiple keys at once. If this is not set then `GetFunc` will be used instead but will be slower.
+4. `SetFunc` (Required) Is your function to perform a `SET` command.
+5. `DeleteFunc` (Required) Is your function to perform a `DEL` command.
+6. `DeleteManyFunc` (Optional) Is your function to perform a `DEL` command but handle more than one key.
+7. `GetKeysFunc` (Optional) Is your function to perform a `KEYS` command with a filter pattern. Required if you want to use the `ClearAll` feature on your dataloader when using Redis.
+7. `ObjMarshal` (Optional) You can define your own serializer. If not defined then this gets set to json.Marshal.
+8. `ObjUnmarshal` (Optional) You can define your own deserializer. If not defined then this gets set to json.Unmarshal.
+9. `KeyToStringFunc` (Optional) Is used to convert your key to a string representation. If this is not set and your key type is a struct, map, and array of non string types, then the default function `Marshal{{.Name}}ToString` will be used to serialize your key into a single value which can be slower than alternatives. If you have a String() method on your type, this is where you should use it.
+
+Example setup:
+```
+redisClient := SetupRedis() // example uses redis/go-redis package
+ttl := 5 * time.Minute
+// use json-iterator/go package for optimized json serialization. Confirm compatibility with your types.
+JSONItGraphObjects := jsoniter.Config{
+		EscapeHTML:                    true,  // Standard library compatible
+		ValidateJsonRawMessage:        false, // Standard library compatible
+		SortMapKeys:                   false, // dont sort map keys when marshalling
+		ObjectFieldMustBeSimpleString: true,  // do not unescape object field. Ex. Field name "Ag\u0065" will not be unescaped to "Age". Only set to true if your objects do not have feilds that require this.
+		CaseSensitive:                 true,  // Case senstive field names. "Name" field in Struct will not match "name" in json string when deserializing
+	}.Froze()
+
+myOrganizationLoader := NewOrganizationLoader(OrganizationLoaderConfig{
+	Wait:        5 * time.Millisecond,
+	MaxBatch:    200,
+	Fetch:       myOrganizationFetchFunc,
+	RedisConfig: &OrganizationLoaderRedisConfig{
+				SetTTL:         &ttl,
+				GetFunc:        func(ctx context.Context, key string) (string, error) {
+				    v, err := redisClient.Get(ctx, key).Result()
+                	if err != nil && err == redis.Nil {
+                		// no matching key found, empty result
+                		return "", ErrRecordNotFound
+                	} else if err != nil {
+                		// error getting value from Redis
+                		return "", err
+                	}
+                	return v, nil
+				},
+				GetManyFunc:     func(ctx context.Context, keys []string) ([]string, []error, error) {
+				    v, err := redisClient.MGet(ctx, keys...).Result()
+                	if err != nil {
+                		// error getting value from Redis
+                		return nil, nil, err
+                	}
+                	errs := make([]error, len(v))
+                	ret := make([]string, len(v))
+                	for i, v := range v {
+                		if v == nil {
+                			// key not found, set errs
+                			errs[i] = ErrRecordNotFound
+                		} else {
+                			// key found, set value
+                			switch typed := v.(type) {
+                			case string:
+                				ret[i] = typed
+                			default:
+                				errs[i] = ErrRecordNotFound
+                			}
+                		}
+                	}
+                	return ret, errs, nil
+				},
+				SetFunc:      func(ctx context.Context, key string, value interface{}, ttl *time.Duration) error {
+					var v interface{}
+                	if value == nil {
+                		// empty value. Key's value in Redis will be "null", no quotes
+                		v = nil
+                	} else {
+                		switch typed := value.(type) {
+                		case string:
+                			// value is already a string, use as is
+                			v = typed
+                		default:
+                			// serialize interface to byte array
+                			var err error
+                			v, err = json.Marshal(value)
+                			if err != nil {
+                				// failed to serialize object
+                				return err
+                			}
+                		}
+                	}
+                	if ttl == nil {
+                		// use system default TTL
+                		return redisClient.Set(ctx, key, v, 0).Err()
+                	} else {
+                		// use provided TTL
+                		return redisClient.Set(ctx, key, v, *ttl).Err()
+                	}
+				},
+				DeleteFunc:     func(ctx context.Context, key string) error {
+				    return redisClient.Del(ctx, key).Err()
+				},
+				DeleteManyFunc: func(ctx context.Context, keys []string) error {
+				    return redisClient.Del(ctx, keys...).Err()
+				},
+				GetKeysFunc:    func(ctx context.Context, pattern string) ([]string, error) {
+				    return redisClient.Keys(ctx, pattern).Result()
+				},
+				ObjMarshal:     JSONItGraphObjects.Marshal,
+				ObjUnmarshal:   JSONItGraphObjects.Unmarshal,
+			},
+})
+```
+
+If you're using session based dataloaders in combination with globally available dataloaders, you can reference your global dataloader within your session using hooks like the following example:
+
+```
+sessionBasedOrgLoader = NewOrganizationLoader(OrganizationLoaderConfig{
+	Wait:              5 * time.Millisecond,
+	MaxBatch:          200,
+	Fetch:             myOrganizationLoader.LoadAll,
+	HookAfterPrime:    myOrganizationLoader.ForcePrime,
+	HookAfterClear:    myOrganizationLoader.Clear,
+	HookAfterClearAll: myOrganizationLoader.ClearAll,
+})
+```
 
 #### Benchmarks
 

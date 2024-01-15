@@ -121,6 +121,7 @@ func NewUserIntLoader(config UserIntLoaderConfig) *UserIntLoader {
 				SetFunc:         config.RedisConfig.SetFunc,         // (SET)
 				DeleteFunc:      config.RedisConfig.DeleteFunc,      // (DEL)
 				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // (DEL) optional, but recommened for ClearAll performance
+				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll performance
 				ObjMarshal:      config.RedisConfig.ObjMarshal,      // optional
 				ObjUnmarshal:    config.RedisConfig.ObjUnmarshal,    // optional
 				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional, but recommended for complex types that need to be serialized
@@ -350,16 +351,16 @@ func (l *UserIntLoader) LoadThunk(key int) (*User, func() (*User, error)) {
 			// error unmarshalling, just add to batch
 		}
 		// not found in Redis or error, continue
-		l.mu.Lock()
+		l.mu.Lock() // unsafeAddToBatch will unlock
 	} else {
 		if l.hookExternalCacheGet != nil {
 			if v, ok := l.hookExternalCacheGet(key); ok {
 				return v, nil
 			}
 			// not found in external cache, continue
-			l.mu.Lock()
+			l.mu.Lock() // unsafeAddToBatch will unlock
 		} else {
-			l.mu.Lock()
+			l.mu.Lock() // unsafeAddToBatch will unlock
 
 			if l.expireAfter <= 0 && len(l.cache) > 0 {
 				// not using cache expiration
@@ -440,7 +441,7 @@ func (l *UserIntLoader) LoadAll(keys []int) ([]*User, []error) {
 		} else {
 			for i, err := range errs {
 				if err != nil {
-					l.mu.Lock()
+					l.mu.Lock() // unsafeAddToBatch will unlock
 					if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 						thunks[i] = thunk
 					}
@@ -453,7 +454,7 @@ func (l *UserIntLoader) LoadAll(keys []int) ([]*User, []error) {
 					if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), ret); err == nil {
 						retVals[i] = ret
 					} else {
-						l.mu.Lock()
+						l.mu.Lock() // unsafeAddToBatch will unlock
 						if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
 							thunks[i] = thunk
 						}
