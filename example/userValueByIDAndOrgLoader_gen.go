@@ -102,7 +102,7 @@ func NewUserValueByIDAndOrgLoader(config UserValueByIDAndOrgLoaderConfig) *UserV
 				SetFunc:         config.RedisConfig.SetFunc,         // (SET)
 				DeleteFunc:      config.RedisConfig.DeleteFunc,      // (DEL)
 				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // (DEL) optional, but recommened for ClearAll performance
-				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll performance
+				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll support
 				ObjMarshal:      config.RedisConfig.ObjMarshal,      // optional
 				ObjUnmarshal:    config.RedisConfig.ObjUnmarshal,    // optional
 				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional, but recommended for complex types that need to be serialized
@@ -410,14 +410,15 @@ func (l *UserValueByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]User, []er
 					if vS[i] == "" || vS[i] == "null" {
 						// key found, empty value, set empty value
 						retVals[i] = User{}
-					}
-					ret := User{}
-					if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {
-						retVals[i] = ret
 					} else {
-						l.mu.Lock() // unsafeAddToBatch will unlock
-						if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
-							thunks[i] = thunk
+						ret := User{}
+						if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {
+							retVals[i] = ret
+						} else {
+							l.mu.Lock() // unsafeAddToBatch will unlock
+							if _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {
+								thunks[i] = thunk
+							}
 						}
 					}
 				}

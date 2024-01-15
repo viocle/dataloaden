@@ -120,7 +120,7 @@ func NewStringLoader(config StringLoaderConfig) *StringLoader {
 				SetFunc:         config.RedisConfig.SetFunc,         // (SET)
 				DeleteFunc:      config.RedisConfig.DeleteFunc,      // (DEL)
 				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // (DEL) optional, but recommened for ClearAll performance
-				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll performance
+				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll support
 				ObjMarshal:      config.RedisConfig.ObjMarshal,      // optional
 				ObjUnmarshal:    config.RedisConfig.ObjUnmarshal,    // optional
 				KeyToStringFunc: config.RedisConfig.KeyToStringFunc, // optional, but recommended for complex types that need to be serialized

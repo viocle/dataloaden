@@ -205,12 +205,12 @@ redisClient := SetupRedis() // example uses redis/go-redis package
 ttl := 5 * time.Minute
 // use json-iterator/go package for optimized json serialization. Confirm compatibility with your types.
 JSONItGraphObjects := jsoniter.Config{
-		EscapeHTML:                    true,  // Standard library compatible
-		ValidateJsonRawMessage:        false, // Standard library compatible
-		SortMapKeys:                   false, // dont sort map keys when marshalling
-		ObjectFieldMustBeSimpleString: true,  // do not unescape object field. Ex. Field name "Ag\u0065" will not be unescaped to "Age". Only set to true if your objects do not have feilds that require this.
-		CaseSensitive:                 true,  // Case senstive field names. "Name" field in Struct will not match "name" in json string when deserializing
-	}.Froze()
+	EscapeHTML:                    true,  // Standard library compatible
+	ValidateJsonRawMessage:        false, // Standard library compatible
+	SortMapKeys:                   false, // dont sort map keys when marshalling
+	ObjectFieldMustBeSimpleString: true,  // do not unescape object field. Ex. Field name "Ag\u0065" will not be unescaped to "Age". Only set to true if your objects do not have feilds that require this.
+	CaseSensitive:                 true,  // Case senstive field names. "Name" field in Struct will not match "name" in json string when deserializing
+}.Froze()
 
 myOrganizationLoader := NewOrganizationLoader(OrganizationLoaderConfig{
 	Wait:        5 * time.Millisecond,
@@ -292,6 +292,9 @@ myOrganizationLoader := NewOrganizationLoader(OrganizationLoaderConfig{
 				},
 				ObjMarshal:     JSONItGraphObjects.Marshal,
 				ObjUnmarshal:   JSONItGraphObjects.Unmarshal,
+				KeyToStringFunc: func(key dataLoaderOrganizaionByID) string {
+					return key.String()
+				},
 			},
 })
 ```
