@@ -101,7 +101,7 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 				GetManyFunc:     config.RedisConfig.GetManyFunc,     // (MGET) optional, but recommended for LoadAll performance
 				SetFunc:         config.RedisConfig.SetFunc,         // (SET)
 				DeleteFunc:      config.RedisConfig.DeleteFunc,      // (DEL)
-				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // (DEL) optional, but recommened for ClearAll performance
+				DeleteManyFunc:  config.RedisConfig.DeleteManyFunc,  // (DEL) optional, but recommended for ClearAll performance
 				GetKeysFunc:     config.RedisConfig.GetKeysFunc,     // optional, but recommended for ClearAll support
 				ObjMarshal:      config.RedisConfig.ObjMarshal,      // optional
 				ObjUnmarshal:    config.RedisConfig.ObjUnmarshal,    // optional

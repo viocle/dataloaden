@@ -1,4 +1,7 @@
-### The DATALOADer gENerator [![Go Report Card](https://goreportcard.com/badge/github.com/viocle/dataloaden)](https://goreportcard.com/report/github.com/viocle/dataloaden)
+### The DATALOADer gENerator 
+[![Go Report Card](https://goreportcard.com/badge/github.com/viocle/dataloaden)](https://goreportcard.com/report/github.com/viocle/dataloaden) 
+[![GoDoc](https://godoc.org/github.com/viocle/dataloaden?status.svg)](https://godoc.org/github.com/viocle/dataloaden)
+[![test status](https://github.com/viocle/dataloaden/workflows/tests/badge.svg?branch=master "test status")](https://github.com/viocle/dataloaden/actions)
 
 This fork Requires golang 1.21+
 
@@ -49,8 +52,8 @@ loader := NewLoader()
 user, err := loader.Load("123")
 ```
 
-This method will block for a short amount of time, waiting for any other similar requests to come in, call your fetch
-function once. It also caches values and wont request duplicates in a batch.
+This method will block for a short amount of time, waiting for any other similar requests to come in, and then call your fetch
+function once. It also caches values and won't request duplicates in a batch.
 
 You need to use the built in New{{Loader}} function. This ensures the sync.Pool, initial batch, and optional expiration are all initialized properly. Example:
 ```go
@@ -58,6 +61,7 @@ loader := NewUserLoader(UserLoaderConfig{
 	Wait:     2 * time.Millisecond,
 	MaxBatch: 100,
 	Fetch: func(keys []string) ([]*User, []error) {
+		// perform your DB query or other process to get results for keys here
 		users := make([]*User, len(keys))
 		errors := make([]error, len(keys))
 
@@ -168,11 +172,11 @@ func clearDataLoaderExpiredCache() {
 3. Generated files will be in camelCase
 4. Added GenerateWithPrefix() which allows you to specify the prefix of a generated file
 5. Added ClearExpired() which allow you to clear all expired cached items in loader
-6. Added ForcePrime(key, value) which allows you to prime the cache with the provided key and value just like Prime() except that if the key already exists in the cache, the value is replaced. This removes the need to call Clear(key).Prime(key, value) if desired
+6. Added ForcePrime(key, value) which allows you to prime the cache with the provided key and value just like Prime() except that if the key already exists in the cache, the value is replaced. This removes the need to call Clear(key) then Prime(key, value) if desired
 7. Added PrimeMany([]keys, []values) which allows you to prime multiple key/values into the cache with a single call
 8. Add configuration to New{{LoadName}}Loader function.
 9. Batches are pre-allocated and re-used to lower allocations between Loads.
-10. Batches now use a slice as well as a map for key store and lookup. There is a slight memory usage penalty for the duplicate key values in the map at the extra performance increase seen in lookups instead of iterating over the keys in the slice. You can see this new usage in the keyIndex function. This performance change is really apparent when you have large maxBatch values.
+10. Batches now use a slice as well as a map for key store and lookup. There is a slight memory usage penalty for the duplicate key values in the map but with the benefit of a performance increase seen in lookups instead of iterating over the keys in the slice. You can see this new usage in the keyIndex function. This performance change is really apparent when you have large maxBatch values.
 11. LoadThunk has the option to now return the value directly instead of having to wrap the cache find in a function to be called. This change was implemented in LoadThunk and return checking is done in Load. If no function was returned then the returned value is to be used.
 12. You can define Hook functions to be called after a key is set, cleared, when all keys are cleared, or an item is cleared because it has expired. 
 a.`HookAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `HookAfterSet` will not get set.
@@ -197,7 +201,7 @@ You can use Redis as the cache storage for your dataloader by configuring the Re
 7. `GetKeysFunc` (Optional) Is your function to perform a `KEYS` command with a filter pattern. Required if you want to use the `ClearAll` feature on your dataloader when using Redis.
 7. `ObjMarshal` (Optional) You can define your own serializer. If not defined then this gets set to json.Marshal.
 8. `ObjUnmarshal` (Optional) You can define your own deserializer. If not defined then this gets set to json.Unmarshal.
-9. `KeyToStringFunc` (Optional) Is used to convert your key to a string representation. If this is not set and your key type is a struct, map, and array of non string types, then the default function `Marshal{{.Name}}ToString` will be used to serialize your key into a single value which can be slower than alternatives. If you have a String() method on your type, this is where you should use it.
+9. `KeyToStringFunc` (Optional) Is used to convert your key to a string representation. If this is not set and your key type is a struct, map, or an array of non string types, then the default function `Marshal{{.Name}}ToString` will be used to serialize your key into a single value which can be slower than alternatives. If you have a String() method on your key type, this is where you should use it.
 
 Example setup:
 ```
