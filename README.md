@@ -1,7 +1,7 @@
 ### The DATALOADer gENerator 
 [![Go Report Card](https://goreportcard.com/badge/github.com/viocle/dataloaden)](https://goreportcard.com/report/github.com/viocle/dataloaden) 
 [![GoDoc](https://godoc.org/github.com/viocle/dataloaden?status.svg)](https://godoc.org/github.com/viocle/dataloaden)
-[![test status](https://github.com/viocle/dataloaden/workflows/tests/badge.svg?branch=master "test status")](https://github.com/viocle/dataloaden/actions)
+[![tests](https://github.com/viocle/dataloaden/actions/workflows/tests.yml/badge.svg)](https://github.com/viocle/dataloaden/actions/workflows/tests.yml)
 
 This fork Requires golang 1.21+
 
