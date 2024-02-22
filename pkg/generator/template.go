@@ -311,6 +311,7 @@ type {{.Name|lcFirst}}Batch struct {
 	errors   []error
 	closing bool
 	lock sync.Mutex
+	reqCount int
 	checkedIn int
 }
 
@@ -330,7 +331,7 @@ func (l *{{.Name}}) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &{{.Name|lcFirst}}Batch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, checkedIn: 0, lock: sync.Mutex{}}
+		l.batch = &{{.Name|lcFirst}}Batch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, reqCount: 0, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -348,6 +349,7 @@ func (l *{{.Name}}) createNewBatch() *{{.Name|lcFirst}}Batch {
 		data: nil, 
 		errors: nil,
 		lock: sync.Mutex{},
+		reqCount: 0,
 		checkedIn: 0,
 	}
 }
@@ -808,6 +810,7 @@ func (l *{{.Name}}) unsafeSet(key {{.KeyType}}, value {{.ValType.String}}) {
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
 func (b *{{.Name|lcFirst}}Batch) keyIndex(l *{{.Name}}, key {{.KeyType}}) int {
+	b.reqCount++
 	if i, ok := b.keysMap[key]; ok {
 		return i
 	}
@@ -880,7 +883,7 @@ func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error)
 	// check if all thunks have checked in and if so, return batch to pool
 	b.lock.Lock()
 	b.checkedIn++
-	if b.checkedIn >= len(b.data) {
+	if b.checkedIn >= b.reqCount {
 		b.checkedIn = 0
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use

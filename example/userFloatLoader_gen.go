@@ -290,6 +290,7 @@ type userFloatLoaderBatch struct {
 	errors    []error
 	closing   bool
 	lock      sync.Mutex
+	reqCount  int
 	checkedIn int
 }
 
@@ -309,7 +310,7 @@ func (l *UserFloatLoader) unsafeBatchSet() {
 		// reset
 		clear(b.keysMap)
 		clear(b.keys)
-		l.batch = &userFloatLoaderBatch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, checkedIn: 0, lock: sync.Mutex{}}
+		l.batch = &userFloatLoaderBatch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, reqCount: 0, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
 		l.batch.now = time.Now().UnixNano()
@@ -327,6 +328,7 @@ func (l *UserFloatLoader) createNewBatch() *userFloatLoaderBatch {
 		data:      nil,
 		errors:    nil,
 		lock:      sync.Mutex{},
+		reqCount:  0,
 		checkedIn: 0,
 	}
 }
@@ -762,6 +764,7 @@ func (l *UserFloatLoader) unsafeSet(key float64, value *User) {
 // keyIndex will return the location of the key in the batch, if its not found
 // it will add the key to the batch
 func (b *userFloatLoaderBatch) keyIndex(l *UserFloatLoader, key float64) int {
+	b.reqCount++
 	if i, ok := b.keysMap[key]; ok {
 		return i
 	}
@@ -834,7 +837,7 @@ func (b *userFloatLoaderBatch) getResult(pos int) (*User, error) {
 	// check if all thunks have checked in and if so, return batch to pool
 	b.lock.Lock()
 	b.checkedIn++
-	if b.checkedIn >= len(b.data) {
+	if b.checkedIn >= b.reqCount {
 		b.checkedIn = 0
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use

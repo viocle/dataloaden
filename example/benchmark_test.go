@@ -98,7 +98,6 @@ func BenchmarkLoaderStruct(b *testing.B) {
 	b.Run("caches", func(b *testing.B) {
 		thunks := make([]func() (*User, error), b.N)
 		for i := 0; i < b.N; i++ {
-			// thunks[i] = dl.LoadThunk(UserByIDAndOrg{ID: strconv.Itoa(rand.Int() % 300), OrgID: orgIDs[rand.Intn(len(orgIDs)-1)]})
 			_, f := dl.LoadThunk(UserByIDAndOrg{ID: strconv.Itoa(rand.Int() % 300), OrgID: orgIDs[rand.Intn(len(orgIDs)-1)]})
 			if f != nil {
 				thunks[i] = f
@@ -115,7 +114,6 @@ func BenchmarkLoaderStruct(b *testing.B) {
 	b.Run("random spread", func(b *testing.B) {
 		thunks := make([]func() (*User, error), b.N)
 		for i := 0; i < b.N; i++ {
-			// thunks[i] = dl.LoadThunk(UserByIDAndOrg{ID: strconv.Itoa(rand.Int() % 300), OrgID: orgIDs[rand.Intn(len(orgIDs)-1)]})
 			_, f := dl.LoadThunk(UserByIDAndOrg{ID: strconv.Itoa(rand.Int() % 300), OrgID: orgIDs[rand.Intn(len(orgIDs)-1)]})
 			if f != nil {
 				thunks[i] = f
