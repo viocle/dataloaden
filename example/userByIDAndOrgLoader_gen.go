@@ -729,6 +729,7 @@ func (b *userByIDAndOrgLoaderBatch) getResult(pos int) (*User, error) {
 	b.lock.Lock()
 	b.checkedIn++
 	if b.checkedIn >= b.reqCount {
+		b.reqCount = 0
 		b.checkedIn = 0
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use
