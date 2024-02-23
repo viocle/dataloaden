@@ -328,9 +328,7 @@ func (l *{{.Name}}) Load(key {{.KeyType.String}}) ({{.ValType.String}}, error) {
 func (l *{{.Name}}) unsafeBatchSet() {
 	if l.batch == nil {
 		b := l.batchPool.Get().(*{{.Name|lcFirst}}Batch)
-		// reset
-		clear(b.keysMap)
-		clear(b.keys)
+		// create new batch re-using our keysMap and keys fields
 		l.batch = &{{.Name|lcFirst}}Batch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, reqCount: 0, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -868,6 +866,7 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 // getResult will return the result for the given position from the batch
 func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error) {
 	var data {{.ValType.String}}
+	b.lock.Lock()
 	if pos < len(b.data) {
 		data = b.data[pos]
 	}
@@ -881,11 +880,13 @@ func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error)
 	}
 
 	// check if all thunks have checked in and if so, return batch to pool
-	b.lock.Lock()
 	b.checkedIn++
 	if b.checkedIn >= b.reqCount {
+		// reset
 		b.reqCount = 0
 		b.checkedIn = 0
+		clear(b.keysMap)
+		clear(b.keys)
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use
 		b.loader.batchPool.Put(b)

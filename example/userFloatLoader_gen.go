@@ -307,9 +307,7 @@ func (l *UserFloatLoader) Load(key float64) (*User, error) {
 func (l *UserFloatLoader) unsafeBatchSet() {
 	if l.batch == nil {
 		b := l.batchPool.Get().(*userFloatLoaderBatch)
-		// reset
-		clear(b.keysMap)
-		clear(b.keys)
+		// create new batch re-using our keysMap and keys fields
 		l.batch = &userFloatLoaderBatch{loader: l, now: 0, done: make(chan struct{}), keysMap: b.keysMap, keys: b.keys[:0], data: nil, errors: nil, reqCount: 0, checkedIn: 0, lock: sync.Mutex{}}
 	} else if l.batch.now == 0 {
 		// have a batch but first use, set the start time
@@ -822,6 +820,7 @@ func (b *userFloatLoaderBatch) end(l *UserFloatLoader) {
 // getResult will return the result for the given position from the batch
 func (b *userFloatLoaderBatch) getResult(pos int) (*User, error) {
 	var data *User
+	b.lock.Lock()
 	if pos < len(b.data) {
 		data = b.data[pos]
 	}
@@ -835,11 +834,13 @@ func (b *userFloatLoaderBatch) getResult(pos int) (*User, error) {
 	}
 
 	// check if all thunks have checked in and if so, return batch to pool
-	b.lock.Lock()
 	b.checkedIn++
 	if b.checkedIn >= b.reqCount {
+		// reset
 		b.reqCount = 0
 		b.checkedIn = 0
+		clear(b.keysMap)
+		clear(b.keys)
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use
 		b.loader.batchPool.Put(b)
