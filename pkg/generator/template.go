@@ -138,6 +138,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 				GetFunc: config.RedisConfig.GetFunc, // (GET)
 				GetManyFunc: config.RedisConfig.GetManyFunc, // (MGET) optional, but recommended for LoadAll performance
 				SetFunc: config.RedisConfig.SetFunc, // (SET)
+				SetManyFunc: config.RedisConfig.SetManyFunc, // (SET/MSET) optional, but recommended for PrimeMany performance. Suggested to use pipeline or MSET
 				DeleteFunc: config.RedisConfig.DeleteFunc, // (DEL)
 				DeleteManyFunc: config.RedisConfig.DeleteManyFunc, // (DEL) optional, but recommended for ClearAll performance
 				GetKeysFunc: config.RedisConfig.GetKeysFunc, // optional, but recommended for ClearAll support
@@ -189,6 +190,10 @@ type {{.Name}}RedisConfig struct {
 
 	// SetFunc should set a value in Redis given a key and value with an optional ttl (Time To Live)
 	SetFunc func(ctx context.Context, key string, value interface{}, ttl *time.Duration) error
+
+	// SetManyFunc should set one or more values in Redis given a set of keys and values with an optional ttl (Time To Live)
+	// If not set then SetFunc will be used instead, but will be called one at a time for each key. To implement, look at using a pipeline or MSET
+	SetManyFunc func(ctx context.Context,  keys []string, values []interface{}, ttl *time.Duration) ([]error, error)
 
 	// DeleteFunc should delete a value in Redis given a key
 	DeleteFunc func(ctx context.Context, key string) error
@@ -614,8 +619,38 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 	ret := make([]bool, len(keys))
 	if l.redisConfig != nil {
 		// using Redis
-		for i, key := range keys {
-			ret[i] = l.redisPrime(key, values[i])
+		if l.redisConfig.SetManyFunc != nil && len(keys) > 1 {
+			// SetManyFunc is set and items to prime is >1
+			// convert values slice (of {{.ValType.String}}) to interface slice
+			vSet := make([]interface{}, len(values))
+			for i := range values {
+				vSet[i] = values[i]
+			}
+			{{ if ne .KeyType.String "string" }}// convert keys slice (of {{.KeyType.String}}) to string slice
+			kSet := make([]string, len(keys))
+			for i, key := range keys {
+				kSet[i] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String }}
+			}
+			// call SetManyFunc with our keys and values
+			retErr, err := l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			{{- else }}// call SetManyFunc with our keys and values
+			retErr, err := l.redisConfig.SetManyFunc(context.Background(), keys, vSet, l.redisConfig.SetTTL)
+			{{- end }}
+			if err == nil {
+			 	// set the return values based on each key's error
+				for i, err := range retErr {
+					ret[i] = err != nil
+					// call hookAfterSet if set
+					if l.hookAfterSet != nil {
+						l.hookAfterSet(keys[i], values[i])
+					}
+				}
+			}
+		} else {
+			// fallback to using redisPrime (one at a time)
+			for i, key := range keys {
+				ret[i] = l.redisPrime(key, values[i])
+			}
 		}
 	} else {
 		l.mu.Lock()
