@@ -179,29 +179,32 @@ func clearDataLoaderExpiredCache() {
 10. Batches now use a slice as well as a map for key store and lookup. There is a slight memory usage penalty for the duplicate key values in the map but with the benefit of a performance increase seen in lookups instead of iterating over the keys in the slice. You can see this new usage in the keyIndex function. This performance change is really apparent when you have large maxBatch values.
 11. LoadThunk has the option to now return the value directly instead of having to wrap the cache find in a function to be called. This change was implemented in LoadThunk and return checking is done in Load. If no function was returned then the returned value is to be used.
 12. You can define Hook functions to be called after a key is set, cleared, when all keys are cleared, or an item is cleared because it has expired. 
-a.`HookAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `HookAfterSet` will not get set.
-b.`HookAfterClear`: When a key is cleared in the dataloader, this function will be called if defined. This does not occur when an existing key is being replaced or it's deleted because of expiration.
-c.`HookAfterClearAll`: When you call the `ClearAll` function to clear the entire dataloader cache, this function will be called if defined.
-d.`HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
-e. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
-f. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
-g. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
+a. `HookAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `HookAfterSet` will not get set.
+b. `HookAfterPrime`: When a key is set using Prime, ForcePrime, or PrimeMany, this function will be called if defined.
+c. `HookAfterPrimeMany`: When one or more keys are set using PrimeMany, this will function will be called if defined. If not defined but `HookAfterPrime` is, that hook will be called.
+d. `HookAfterClear`: When a key is cleared in the dataloader, this function will be called if defined. This does not occur when an existing key is being replaced or it's deleted because of expiration.
+e. `HookAfterClearAll`: When you call the `ClearAll` function to clear the entire dataloader cache, this function will be called if defined.
+f. `HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
+g. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
+h. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
+i. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
 13. Redis support. See Redis Support section below for more details.
 
 #### Redis Support
 
 You can use Redis as the cache storage for your dataloader by configuring the RedisConfig value when creating a new instance of a dataloader. Below are the configuration values available and how they're used.
 
-1. `SetTTL` (Optional) Is the KEEPTTL value used in the SET command. This value is passed back to your SetFunc value when being called.
+1. `SetTTL` (Optional) Is the KEEPTTL value used in the SET command. This value is passed back to your SetFunc/SetManyFunc value when being called.
 2. `GetFunc` (Required) Is your function to perform a `GET` command.
 3. `GetManyFunc` (Optional) Is your function to perform a `MGET` command wich can retrieve multiple keys at once. If this is not set then `GetFunc` will be used instead but will be slower.
 4. `SetFunc` (Required) Is your function to perform a `SET` command.
-5. `DeleteFunc` (Required) Is your function to perform a `DEL` command.
-6. `DeleteManyFunc` (Optional) Is your function to perform a `DEL` command but handle more than one key.
-7. `GetKeysFunc` (Optional) Is your function to perform a `KEYS` command with a filter pattern. Required if you want to use the `ClearAll` feature on your dataloader when using Redis.
-7. `ObjMarshal` (Optional) You can define your own serializer. If not defined then this gets set to json.Marshal.
-8. `ObjUnmarshal` (Optional) You can define your own deserializer. If not defined then this gets set to json.Unmarshal.
-9. `KeyToStringFunc` (Optional) Is used to convert your key to a string representation. If this is not set and your key type is a struct, map, or an array of non string types, then the default function `Marshal{{.Name}}ToString` will be used to serialize your key into a single value which can be slower than alternatives. If you have a String() method on your key type, this is where you should use it.
+5. `SetManyFunc` (Optional) Is your function to perform multiple sets using pipelines or a `MSET` command. If this is not set then `SetFunc` will be used instead but will be slower.
+6. `DeleteFunc` (Required) Is your function to perform a `DEL` command.
+7. `DeleteManyFunc` (Optional) Is your function to perform a `DEL` command but handle more than one key.
+8. `GetKeysFunc` (Optional) Is your function to perform a `KEYS` command with a filter pattern. Required if you want to use the `ClearAll` feature on your dataloader when using Redis.
+9. `ObjMarshal` (Optional) You can define your own serializer. If not defined then this gets set to json.Marshal.
+10. `ObjUnmarshal` (Optional) You can define your own deserializer. If not defined then this gets set to json.Unmarshal.
+11. `KeyToStringFunc` (Optional) Is used to convert your key to a string representation. If this is not set and your key type is a struct, map, or an array of non string types, then the default function `Marshal{{.Name}}ToString` will be used to serialize your key into a single value which can be slower than alternatives. If you have a String() method on your key type, this is where you should use it.
 
 Example setup:
 ```
@@ -221,85 +224,124 @@ myOrganizationLoader := NewOrganizationLoader(OrganizationLoaderConfig{
 	MaxBatch:    200,
 	Fetch:       myOrganizationFetchFunc,
 	RedisConfig: &OrganizationLoaderRedisConfig{
-				SetTTL:         &ttl,
-				GetFunc:        func(ctx context.Context, key string) (string, error) {
-				    v, err := redisClient.Get(ctx, key).Result()
-                	if err != nil && err == redis.Nil {
-                		// no matching key found, empty result
-                		return "", ErrRecordNotFound
-                	} else if err != nil {
-                		// error getting value from Redis
-                		return "", err
-                	}
-                	return v, nil
-				},
-				GetManyFunc:     func(ctx context.Context, keys []string) ([]string, []error, error) {
-				    v, err := redisClient.MGet(ctx, keys...).Result()
-                	if err != nil {
-                		// error getting value from Redis
-                		return nil, nil, err
-                	}
-                	errs := make([]error, len(v))
-                	ret := make([]string, len(v))
-                	for i, v := range v {
-                		if v == nil {
-                			// key not found, set errs
-                			errs[i] = ErrRecordNotFound
-                		} else {
-                			// key found, set value
-                			switch typed := v.(type) {
-                			case string:
-                				ret[i] = typed
-                			default:
-                				errs[i] = ErrRecordNotFound
-                			}
-                		}
-                	}
-                	return ret, errs, nil
-				},
-				SetFunc:      func(ctx context.Context, key string, value interface{}, ttl *time.Duration) error {
-					var v interface{}
-                	if value == nil {
-                		// empty value. Key's value in Redis will be "null", no quotes
-                		v = nil
-                	} else {
-                		switch typed := value.(type) {
-                		case string:
-                			// value is already a string, use as is
-                			v = typed
-                		default:
-                			// serialize interface to byte array
-                			var err error
-                			v, err = json.Marshal(value)
-                			if err != nil {
-                				// failed to serialize object
-                				return err
-                			}
-                		}
-                	}
-                	if ttl == nil {
-                		// use system default TTL
-                		return redisClient.Set(ctx, key, v, 0).Err()
-                	} else {
-                		// use provided TTL
-                		return redisClient.Set(ctx, key, v, *ttl).Err()
-                	}
-				},
-				DeleteFunc:     func(ctx context.Context, key string) error {
-				    return redisClient.Del(ctx, key).Err()
-				},
-				DeleteManyFunc: func(ctx context.Context, keys []string) error {
-				    return redisClient.Del(ctx, keys...).Err()
-				},
-				GetKeysFunc:    func(ctx context.Context, pattern string) ([]string, error) {
-				    return redisClient.Keys(ctx, pattern).Result()
-				},
-				ObjMarshal:     JSONItGraphObjects.Marshal,
-				ObjUnmarshal:   JSONItGraphObjects.Unmarshal,
-				KeyToStringFunc: func(key dataLoaderOrganizaionByID) string {
-					return key.String()
-				},
-			},
+		SetTTL:         &ttl,
+		GetFunc:        func(ctx context.Context, key string) (string, error) {
+			v, err := redisClient.Get(ctx, key).Result()
+			if err != nil && err == redis.Nil {
+				// no matching key found, empty result
+				return "", ErrRecordNotFound
+			} else if err != nil {
+				// error getting value from Redis
+				return "", err
+			}
+			return v, nil
+		},
+		GetManyFunc:     func(ctx context.Context, keys []string) ([]string, []error, error) {
+			v, err := redisClient.MGet(ctx, keys...).Result()
+			if err != nil {
+				// error getting value from Redis
+				return nil, nil, err
+			}
+			errs := make([]error, len(v))
+			ret := make([]string, len(v))
+			for i, v := range v {
+				if v == nil {
+					// key not found, set errs
+					errs[i] = ErrRecordNotFound
+				} else {
+					// key found, set value
+					switch typed := v.(type) {
+					case string:
+						ret[i] = typed
+					default:
+						errs[i] = ErrRecordNotFound
+					}
+				}
+			}
+			return ret, errs, nil
+		},
+		SetFunc:      func(ctx context.Context, key string, value interface{}, ttl *time.Duration) error {
+			var v interface{}
+			if value == nil {
+				// empty value. Key's value in Redis will be "null", no quotes
+				v = nil
+			} else {
+				switch typed := value.(type) {
+				case string:
+					// value is already a string, use as is
+					v = typed
+				default:
+					// serialize interface to byte array
+					var err error
+					v, err = json.Marshal(value)
+					if err != nil {
+						// failed to serialize object
+						return err
+					}
+				}
+			}
+			if ttl == nil {
+				// use system default TTL
+				return redisClient.Set(ctx, key, v, 0).Err()
+			} else {
+				// use provided TTL
+				return redisClient.Set(ctx, key, v, *ttl).Err()
+			}
+		},
+		SetManyFunc: func(ctx context.Context, keys []string, values []interface{}, ttl *time.Duration) ([]error, error) {
+			if ttl == nil {
+				ttl = &time.Duration(0)
+			}
+			retErr := make([]error, len(values))
+			pl := redisClient.Pipeline()
+			for idx, key := range keys {
+				var v interface{}
+				if values[idx] == nil {
+					// empty value. Key's value in Redis will be "null", no quotes
+					v = nil
+				} else {
+					switch typed := values[idx].(type) {
+					case string:
+						// value is already a string, use as is
+						v = typed
+					default:
+						// serialize interface to byte array
+						var err error
+						v, err = json.Marshal(values[idx])
+						if err != nil {
+							// failed to serialize object
+							return err
+						}
+					}
+				}
+				pl.Set(ctx, key, v, *ttl)
+			}
+			ret, err := pl.Exec(ctx)
+			for i, r := range ret {
+				if r.Err() != nil {
+					retErr[i] = r.Err()
+				}
+			}
+			if err != nil {
+				return retErr, err
+			}
+			return retErr, nil
+		},
+		DeleteFunc:     func(ctx context.Context, key string) error {
+			return redisClient.Del(ctx, key).Err()
+		},
+		DeleteManyFunc: func(ctx context.Context, keys []string) error {
+			return redisClient.Del(ctx, keys...).Err()
+		},
+		GetKeysFunc:    func(ctx context.Context, pattern string) ([]string, error) {
+			return redisClient.Keys(ctx, pattern).Result()
+		},
+		ObjMarshal:     JSONItGraphObjects.Marshal,
+		ObjUnmarshal:   JSONItGraphObjects.Unmarshal,
+		KeyToStringFunc: func(key dataLoaderOrganizaionByID) string {
+			return key.String()
+		},
+	},
 })
 ```
 

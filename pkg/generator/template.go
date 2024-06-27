@@ -77,8 +77,11 @@ type {{.Name}}Config struct {
 	// HookAfterSet is called after a value is set in the cache
 	HookAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
 
-	// HookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// HookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany.
 	HookAfterPrime func(key {{.KeyType.String}}, value {{.ValType.String}})
+
+	// HookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then HookAfterPrime will be used if set.
+	HookAfterPrimeMany func(keys []{{.KeyType.String}}, values []{{.ValType.String}})
 
 	// HookAfterClear is called after a value is cleared from the cache
 	HookAfterClear func(key {{.KeyType.String}})
@@ -124,6 +127,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 		hookAfterFetch: config.HookAfterFetch,
 		hookAfterSet: config.HookAfterSet,
 		hookAfterPrime: config.HookAfterPrime,
+		hookAfterPrimeMany: config.HookAfterPrimeMany,
 		hookAfterClear: config.HookAfterClear,
 		hookAfterClearAll: config.HookAfterClearAll,
 		hookAfterExpired:  config.HookAfterExpired,
@@ -290,8 +294,11 @@ type {{.Name}} struct {
 	// hookAfterSet is called after a value is set in the cache
 	hookAfterSet func(key {{.KeyType.String}}, value {{.ValType.String}})
 
-	// hookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// hookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany
 	hookAfterPrime func(key {{.KeyType.String}}, value {{.ValType.String}})
+
+	// hookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then hookAfterPrime will be used if set.
+	hookAfterPrimeMany func(keys []{{.KeyType.String}}, values []{{.ValType.String}})
 
 	// hookAfterClear is called after a value is cleared from the cache
 	hookAfterClear func(key {{.KeyType.String}})
@@ -610,6 +617,11 @@ func (l *{{.Name}}) unsafePrime(key {{.KeyType}}, value {{.ValType.String}}, for
 	return !found || forceReplace
 }
 
+// PrimeManyNoReturn will prime the cache with the given keys and values. Value index is matched to key index. Wraps the PrimeMany and ignores the return values. Helpful if you want to connect up to HookAfterPrimeMany in another dataloader
+func (l *{{.Name}}) PrimeManyNoReturn(keys []{{.KeyType}}, values []{{.ValType.String}}) {
+	l.PrimeMany(keys, values)
+}
+
 // PrimeMany will prime the cache with the given keys and values. Value index is matched to key index.
 func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}}) []bool {
 	if len(keys) != len(values) {
@@ -617,6 +629,12 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 		return make([]bool, len(keys))
 	}
 	ret := make([]bool, len(keys))
+	var hookKeys []{{.KeyType}}
+	var hookValues []{{.ValType.String}}
+	if l.hookAfterPrimeMany != nil {
+		hookKeys = make([]{{.KeyType}}, 0, len(keys))
+		hookValues = make([]{{.ValType.String}}, 0, len(values))
+	}
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.SetManyFunc != nil && len(keys) > 1 {
@@ -639,25 +657,63 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 			if err == nil {
 			 	// set the return values based on each key's error
 				for i, err := range retErr {
-					ret[i] = err != nil
-					// call hookAfterSet if set
-					if l.hookAfterSet != nil {
-						l.hookAfterSet(keys[i], values[i])
+					ret[i] = err == nil
+					if ret[i] {
+						// success, call hookAfterSet, hookAfterPrime, and prepare for hookAfterPrimeMany if any are set
+						if l.hookAfterSet != nil {
+							l.hookAfterSet(keys[i], values[i])
+						}
+						if l.hookAfterPrimeMany != nil {
+							hookKeys = append(hookKeys, keys[i])
+							hookValues = append(hookValues, values[i])
+						} else if l.hookAfterPrime != nil {
+							l.hookAfterPrime(keys[i], values[i])
+						}
 					}
+				}
+				// call hookAfterPrimeMany if set
+				if l.hookAfterPrimeMany != nil {
+					l.hookAfterPrimeMany(hookKeys, hookValues)
 				}
 			}
 		} else {
 			// fallback to using redisPrime (one at a time)
 			for i, key := range keys {
 				ret[i] = l.redisPrime(key, values[i])
+				if ret[i] {
+					// success, call hookAfterPrime and prepare for hookAfterPrimeMany if any are set. redisPrime will handle the call to hookAfterSet
+					if l.hookAfterPrimeMany != nil {
+						hookKeys = append(hookKeys, keys[i])
+						hookValues = append(hookValues, values[i])
+					} else if l.hookAfterPrime != nil {
+						l.hookAfterPrime(keys[i], values[i])
+					}
+				}
+			}
+			// call hookAfterPrimeMany if set
+			if l.hookAfterPrimeMany != nil {
+				l.hookAfterPrimeMany(hookKeys, hookValues)
 			}
 		}
 	} else {
 		l.mu.Lock()
 		for i, key := range keys {
 			ret[i] = l.unsafePrime(key, values[i], false)
+			if ret[i] {
+				// success, call hookAfterPrime and prepare for hookAfterPrimeMany if any are set. unsafePrime will handle the call to hookAfterSet
+				if l.hookAfterPrimeMany != nil {
+					hookKeys = append(hookKeys, keys[i])
+					hookValues = append(hookValues, values[i])
+				} else if l.hookAfterPrime != nil {
+					l.hookAfterPrime(keys[i], values[i])
+				}
+			}
 		}
 		l.mu.Unlock()
+		// call hookAfterPrimeMany if set
+		if l.hookAfterPrimeMany != nil {
+			l.hookAfterPrimeMany(hookKeys, hookValues)
+		}
 	}
 	return ret
 }
