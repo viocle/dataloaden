@@ -56,7 +56,7 @@ type UserValueByIDAndOrgLoaderConfig struct {
 	// HookAfterSet is called after a value is set in the cache
 	HookAfterSet func(key UserByIDAndOrg, value User)
 
-	// HookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// HookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany.
 	HookAfterPrime func(key UserByIDAndOrg, value User)
 
 	// HookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then HookAfterPrime will be used if set.
@@ -249,10 +249,10 @@ type UserValueByIDAndOrgLoader struct {
 	// hookAfterSet is called after a value is set in the cache
 	hookAfterSet func(key UserByIDAndOrg, value User)
 
-	// hookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// hookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany
 	hookAfterPrime func(key UserByIDAndOrg, value User)
 
-	// hookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then HookAfterPrime will be used if set.
+	// hookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then hookAfterPrime will be used if set.
 	hookAfterPrimeMany func(keys []UserByIDAndOrg, values []User)
 
 	// hookAfterClear is called after a value is cleared from the cache
@@ -375,7 +375,8 @@ func (l *UserValueByIDAndOrgLoader) unsafeAddToBatch(key UserByIDAndOrg) (User, 
 		// batch has been closed, pull result
 		data, err := batch.getResult(pos)
 
-		if err == nil {
+		if err == nil && l.redisConfig == nil {
+			// not using Redis, set the cache here, otherwise it'll be done on batch fetch completion
 			l.batchResultSet(key, data)
 		}
 
@@ -513,7 +514,7 @@ func (l *UserValueByIDAndOrgLoader) unsafePrime(key UserByIDAndOrg, value User, 
 	return !found || forceReplace
 }
 
-// PrimeManyNoReturn will prime the cache with the given keys and values. Value index is matched to key index. Wraps the PrimeMany and ignores the return values.
+// PrimeManyNoReturn will prime the cache with the given keys and values. Value index is matched to key index. Wraps the PrimeMany and ignores the return values. Helpful if you want to connect up to HookAfterPrimeMany in another dataloader
 func (l *UserValueByIDAndOrgLoader) PrimeManyNoReturn(keys []UserByIDAndOrg, values []User) {
 	l.PrimeMany(keys, values)
 }
@@ -783,6 +784,30 @@ func (b *userValueByIDAndOrgLoaderBatch) end(l *UserValueByIDAndOrgLoader) {
 		l.hookBeforeFetch(b.keys, "UserValueByIDAndOrgLoader")
 	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.redisConfig != nil && len(b.errors) > 0 {
+		// using Redis, set the cache here for all results without an error
+		if len(b.errors) > 1 {
+			// multiple keys, build key/value set of non errors
+			kSet := make([]string, 0, len(b.keys))
+			vSet := make([]interface{}, 0, len(b.keys))
+			for i, key := range b.keys {
+				if b.errors[i] == nil {
+					// convert keys slice (of UserByIDAndOrg) to string slice
+					kSet = append(kSet, UserValueByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key))
+					vSet = append(vSet, b.data[i])
+				}
+			}
+			if len(kSet) > 0 {
+				// call SetManyFunc with our keys and values
+				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			}
+		} else {
+			// only one key, set the value if no error
+			if b.errors[0] == nil {
+				l.batchResultSet(b.keys[0], b.data[0])
+			}
+		}
+	}
 	if l.hookAfterFetch != nil {
 		l.hookAfterFetch(b.keys, "UserValueByIDAndOrgLoader")
 	}

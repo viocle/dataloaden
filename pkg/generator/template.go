@@ -436,7 +436,8 @@ func (l *{{.Name}}) unsafeAddToBatch(key {{.KeyType.String}}) ({{.ValType.String
 		// batch has been closed, pull result
 		data, err := batch.getResult(pos)
 		
-		if err == nil {
+		if err == nil && l.redisConfig == nil  {
+			// not using Redis, set the cache here, otherwise it'll be done on batch fetch completion
 			l.batchResultSet(key, data)
 		}
 
@@ -947,6 +948,34 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 		l.hookBeforeFetch(b.keys, "{{.Name}}")
 	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.redisConfig != nil && len(b.errors)  > 0 {
+		// using Redis, set the cache here for all results without an error
+		if len(b.errors) > 1 {
+			// multiple keys, build key/value set of non errors
+			kSet := make([]string, 0, len(b.keys))
+			vSet := make([]interface{}, 0, len(b.keys))
+			{{ if ne .KeyType.String "string" }}for i, key := range b.keys {
+				if b.errors[i] == nil {
+					// convert keys slice (of {{.KeyType.String}}) to string slice
+					kSet = append(kSet, {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String }})
+			{{- else }}for i := range b.keys {
+				if b.errors[i] == nil {
+					kSet = append(kSet, {{.Name}}CacheKeyPrefix + b.keys[i])
+					{{- end }}
+					vSet = append(vSet, b.data[i])
+				}
+			}
+			if len(kSet) > 0 {
+				// call SetManyFunc with our keys and values
+				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			}
+		} else {
+			// only one key, set the value if no error
+			if b.errors[0] == nil {
+				l.batchResultSet(b.keys[0], b.data[0])
+			}
+		}
+	}
 	if l.hookAfterFetch != nil {
 		l.hookAfterFetch(b.keys, "{{.Name}}")
 	}

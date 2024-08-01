@@ -60,7 +60,7 @@ type UserFloatLoaderConfig struct {
 	// HookAfterSet is called after a value is set in the cache
 	HookAfterSet func(key float64, value *User)
 
-	// HookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// HookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany.
 	HookAfterPrime func(key float64, value *User)
 
 	// HookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then HookAfterPrime will be used if set.
@@ -273,10 +273,10 @@ type UserFloatLoader struct {
 	// hookAfterSet is called after a value is set in the cache
 	hookAfterSet func(key float64, value *User)
 
-	// hookAfterPrime is called after a value is primed in the cache using Prime or ForcePrime
+	// hookAfterPrime is called after a value is primed in the cache using Prime, ForcePrime, or PrimeMany
 	hookAfterPrime func(key float64, value *User)
 
-	// hookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then HookAfterPrime will be used if set.
+	// hookAfterPrimeMany is called after values are primed in the cache using PrimeMany. If not set then hookAfterPrime will be used if set.
 	hookAfterPrimeMany func(keys []float64, values []*User)
 
 	// hookAfterClear is called after a value is cleared from the cache
@@ -414,7 +414,8 @@ func (l *UserFloatLoader) unsafeAddToBatch(key float64) (*User, func() (*User, e
 		// batch has been closed, pull result
 		data, err := batch.getResult(pos)
 
-		if err == nil {
+		if err == nil && l.redisConfig == nil {
+			// not using Redis, set the cache here, otherwise it'll be done on batch fetch completion
 			l.batchResultSet(key, data)
 		}
 
@@ -574,7 +575,7 @@ func (l *UserFloatLoader) unsafePrime(key float64, value *User, forceReplace boo
 	return !found || forceReplace
 }
 
-// PrimeManyNoReturn will prime the cache with the given keys and values. Value index is matched to key index. Wraps the PrimeMany and ignores the return values.
+// PrimeManyNoReturn will prime the cache with the given keys and values. Value index is matched to key index. Wraps the PrimeMany and ignores the return values. Helpful if you want to connect up to HookAfterPrimeMany in another dataloader
 func (l *UserFloatLoader) PrimeManyNoReturn(keys []float64, values []*User) {
 	l.PrimeMany(keys, values)
 }
@@ -898,6 +899,30 @@ func (b *userFloatLoaderBatch) end(l *UserFloatLoader) {
 		l.hookBeforeFetch(b.keys, "UserFloatLoader")
 	}
 	b.data, b.errors = l.fetch(b.keys)
+	if l.redisConfig != nil && len(b.errors) > 0 {
+		// using Redis, set the cache here for all results without an error
+		if len(b.errors) > 1 {
+			// multiple keys, build key/value set of non errors
+			kSet := make([]string, 0, len(b.keys))
+			vSet := make([]interface{}, 0, len(b.keys))
+			for i, key := range b.keys {
+				if b.errors[i] == nil {
+					// convert keys slice (of float64) to string slice
+					kSet = append(kSet, UserFloatLoaderCacheKeyPrefix+strconv.FormatFloat(key, 'f', -1, 64))
+					vSet = append(vSet, b.data[i])
+				}
+			}
+			if len(kSet) > 0 {
+				// call SetManyFunc with our keys and values
+				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			}
+		} else {
+			// only one key, set the value if no error
+			if b.errors[0] == nil {
+				l.batchResultSet(b.keys[0], b.data[0])
+			}
+		}
+	}
 	if l.hookAfterFetch != nil {
 		l.hookAfterFetch(b.keys, "UserFloatLoader")
 	}
