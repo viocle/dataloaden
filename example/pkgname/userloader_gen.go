@@ -896,7 +896,7 @@ func (b *userLoaderBatch) end(l *UserLoader) {
 	b.data, b.errors = l.fetch(b.keys)
 	if l.redisConfig != nil && len(b.errors) > 0 {
 		// using Redis, set the cache here for all results without an error
-		if len(b.errors) > 1 {
+		if len(b.errors) > 1 && l.redisConfig.SetManyFunc != nil {
 			// multiple keys, build key/value set of non errors
 			kSet := make([]string, 0, len(b.keys))
 			vSet := make([]interface{}, 0, len(b.keys))
@@ -911,9 +911,11 @@ func (b *userLoaderBatch) end(l *UserLoader) {
 				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
 			}
 		} else {
-			// only one key, set the value if no error
-			if b.errors[0] == nil {
-				l.batchResultSet(b.keys[0], b.data[0])
+			// only one key or SetManyFunc not set, set the value(s) if no error using batchResultSet
+			for i, key := range b.keys {
+				if b.errors[i] == nil {
+					l.batchResultSet(key, b.data[i])
+				}
 			}
 		}
 	}
