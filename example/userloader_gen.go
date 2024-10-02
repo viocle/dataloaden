@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -194,6 +195,9 @@ type UserLoaderRedisConfig struct {
 	// ObjUnmarshaler provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
 	ObjUnmarshal func([]byte, any) error
 
+	// HookAfterObjUnmarshal is a method that provides the ability to run a function after an object is unmarshaled. This is useful for setting up any object state after unmarshaling or logging.
+	HookAfterObjUnmarshal func(*User) *User
+
 	// KeyToStringFunc provides you the ability to specify your own function to convert a key to a string, which will be used instead of serialization.
 	// This is only used for non standard types that need to be serialized. If not set, the ObjMarshal function (user defined or default) will be used to serialize a key into a string value
 	// Example: If you have a struct with a String() function that returns a string representation of the struct, you can set this function to that function.
@@ -356,6 +360,9 @@ func (l *UserLoader) LoadThunk(key string) (*User, func() (*User, error)) {
 			}
 			ret := &User{}
 			if err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {
+				if l.redisConfig.HookAfterObjUnmarshal != nil {
+					ret = l.redisConfig.HookAfterObjUnmarshal(ret)
+				}
 				return ret, nil
 			}
 
@@ -463,6 +470,9 @@ func (l *UserLoader) LoadAll(keys []string) ([]*User, []error) {
 					} else {
 						ret := &User{}
 						if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), ret); err == nil {
+							if l.redisConfig.HookAfterObjUnmarshal != nil {
+								ret = l.redisConfig.HookAfterObjUnmarshal(ret)
+							}
 							retVals[i] = ret
 						} else {
 							l.mu.Lock() // unsafeAddToBatch will unlock
@@ -734,13 +744,13 @@ func (l *UserLoader) Clear(key string) {
 	}
 }
 
-// ClearAll clears all values from the cache
-func (l *UserLoader) ClearAll() {
+// ClearAllPrefix clears all values from the cache that match the given prefix (after the cache key prefix if using Redis) Prefix filtering is only used when using Redis and GetKeysFunc is defined or your key type is a string, otherwise all keys are cleared.
+func (l *UserLoader) ClearAllPrefix(prefix string) {
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserLoaderCacheKeyPrefix+"*")
+			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserLoaderCacheKeyPrefix+prefix+"*")
 			// delete all these keys from Redis
 			if l.redisConfig.DeleteManyFunc != nil {
 				l.redisConfig.DeleteManyFunc(context.Background(), keys)
@@ -767,19 +777,46 @@ func (l *UserLoader) ClearAll() {
 		// not using cache expiration
 
 		l.mu.Lock()
-		l.cache = make(map[string]*User, l.maxBatch)
+
+		if prefix != "" {
+			// clear all keys that match the prefix
+			for key := range l.cache {
+				if strings.HasPrefix(key, prefix) {
+					delete(l.cache, key)
+				}
+			}
+		} else {
+			l.cache = make(map[string]*User, l.maxBatch)
+		}
+
 		l.mu.Unlock()
 
 	} else {
 		// using cache expiration
 		l.mu.Lock()
-		l.cacheExpire = make(map[string]*UserLoaderCacheItem, l.maxBatch)
+
+		if prefix != "" {
+			// clear all keys that match the prefix
+			for key := range l.cacheExpire {
+				if strings.HasPrefix(key, prefix) {
+					delete(l.cacheExpire, key)
+				}
+			}
+		} else {
+			l.cacheExpire = make(map[string]*UserLoaderCacheItem, l.maxBatch)
+		}
+
 		l.mu.Unlock()
 	}
 
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}
+}
+
+// ClearAll clears all values from the cache
+func (l *UserLoader) ClearAll() {
+	l.ClearAllPrefix("")
 }
 
 // ClearExpired clears all expired values from the cache if cache expiration is being used

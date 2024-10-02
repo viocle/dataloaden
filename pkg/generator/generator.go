@@ -196,10 +196,10 @@ func LoadThunkMissReturnType(t string) string {
 func LoadThunkMarshalType(t string) string {
 	if strings.HasPrefix(t, "*") {
 		// pointer type
-		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nret := &%s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {\nreturn ret, nil\n}", t[1:])
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nret := &%s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nreturn ret, nil\n}", t[1:])
 	} else if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
 		// slice/map type
-		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nvar ret %s\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t)
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return nil\nreturn nil, nil\n}\nvar ret %s\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nreturn ret, nil\n}", t)
 	}
 	switch t {
 	case "string":
@@ -210,7 +210,7 @@ func LoadThunkMarshalType(t string) string {
 		return "ret, err := strconv.ParseBool(v)\nif err == nil {\n\treturn ret, nil\n}"
 	default:
 		// probably a struct by value. Try to unmarshal from json
-		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return empty value\nreturn %s{}, nil\n}\nret := %s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nreturn ret, nil\n}", t, t)
+		return fmt.Sprintf("if v == \"\" || v == \"null\" {\n// key found, empty value, return empty value\nreturn %s{}, nil\n}\nret := %s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nreturn ret, nil\n}", t, t)
 	}
 }
 
@@ -218,10 +218,10 @@ func LoadThunkMarshalType(t string) string {
 func LoadAllMarshalType(t string) string {
 	if strings.HasPrefix(t, "*") {
 		// pointer type
-		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n} else {\nret := &%s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), ret); err == nil {\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t[1:])
+		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n} else {\nret := &%s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t[1:])
 	} else if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") {
 		// slice/map type
-		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n} else {\nvar ret %s\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t)
+		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, return nil\nretVals[i] = nil\n} else {\nvar ret %s\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t)
 	}
 	switch t {
 	case "string":
@@ -232,7 +232,7 @@ func LoadAllMarshalType(t string) string {
 		return "ret, err := strconv.ParseBool(vS[i])\nif err == nil {\n\tretVals[i] = ret\n}"
 	default:
 		// probably a struct by value. Try to unmarshal from json
-		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, set empty value\nretVals[i] = %s{}\n} else {\nret := %s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t, t)
+		return fmt.Sprintf("if vS[i] == \"\" || vS[i] == \"null\" {\n// key found, empty value, set empty value\nretVals[i] = %s{}\n} else {\nret := %s{}\nif err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {\nif (l.redisConfig.HookAfterObjUnmarshal != nil) {\n\tret = l.redisConfig.HookAfterObjUnmarshal(ret)\n}\nretVals[i] = ret\n} else {\nl.mu.Lock() // unsafeAddToBatch will unlock\nif _, thunk := l.unsafeAddToBatch(keys[i]); thunk != nil {\nthunks[i] = thunk\n}\n}\n}", t, t)
 	}
 }
 

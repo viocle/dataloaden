@@ -176,6 +176,9 @@ type UserValueByIDAndOrgLoaderRedisConfig struct {
 	// ObjUnmarshaler provides you the ability to specify your own encoding package. If not set, the default encoding/json package will be used.
 	ObjUnmarshal func([]byte, any) error
 
+	// HookAfterObjUnmarshal is a method that provides the ability to run a function after an object is unmarshaled. This is useful for setting up any object state after unmarshaling or logging.
+	HookAfterObjUnmarshal func(User) User
+
 	// KeyToStringFunc provides you the ability to specify your own function to convert a key to a string, which will be used instead of serialization.
 	// This is only used for non standard types that need to be serialized. If not set, the ObjMarshal function (user defined or default) will be used to serialize a key into a string value
 	// Example: If you have a struct with a String() function that returns a string representation of the struct, you can set this function to that function.
@@ -334,6 +337,9 @@ func (l *UserValueByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (User, func() 
 			}
 			ret := User{}
 			if err := l.redisConfig.ObjUnmarshal([]byte(v), &ret); err == nil {
+				if l.redisConfig.HookAfterObjUnmarshal != nil {
+					ret = l.redisConfig.HookAfterObjUnmarshal(ret)
+				}
 				return ret, nil
 			}
 			// error unmarshalling, just add to batch
@@ -426,6 +432,9 @@ func (l *UserValueByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]User, []er
 					} else {
 						ret := User{}
 						if err := l.redisConfig.ObjUnmarshal([]byte(vS[i]), &ret); err == nil {
+							if l.redisConfig.HookAfterObjUnmarshal != nil {
+								ret = l.redisConfig.HookAfterObjUnmarshal(ret)
+							}
 							retVals[i] = ret
 						} else {
 							l.mu.Lock() // unsafeAddToBatch will unlock
@@ -670,13 +679,13 @@ func (l *UserValueByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 	}
 }
 
-// ClearAll clears all values from the cache
-func (l *UserValueByIDAndOrgLoader) ClearAll() {
+// ClearAllPrefix clears all values from the cache that match the given prefix (after the cache key prefix if using Redis) Prefix filtering is only used when using Redis and GetKeysFunc is defined or your key type is a string, otherwise all keys are cleared.
+func (l *UserValueByIDAndOrgLoader) ClearAllPrefix(prefix string) {
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+"*")
+			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserValueByIDAndOrgLoaderCacheKeyPrefix+prefix+"*")
 			// delete all these keys from Redis
 			if l.redisConfig.DeleteManyFunc != nil {
 				l.redisConfig.DeleteManyFunc(context.Background(), keys)
@@ -700,12 +709,19 @@ func (l *UserValueByIDAndOrgLoader) ClearAll() {
 	}
 
 	l.mu.Lock()
+
 	l.cache = make(map[UserByIDAndOrg]User, l.maxBatch)
+
 	l.mu.Unlock()
 
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}
+}
+
+// ClearAll clears all values from the cache
+func (l *UserValueByIDAndOrgLoader) ClearAll() {
+	l.ClearAllPrefix("")
 }
 
 // unsafeSet will set the key to value without any locks or checks. This method is not thread safe.
