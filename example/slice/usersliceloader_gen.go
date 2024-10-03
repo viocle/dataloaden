@@ -74,6 +74,9 @@ type UserSliceLoaderConfig struct {
 	// HookAfterClearAll is called after all values are cleared from the cache
 	HookAfterClearAll func()
 
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	HookAfterClearAllPrefix func(prefix string)
+
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key int)
 
@@ -113,6 +116,7 @@ func NewUserSliceLoader(config UserSliceLoaderConfig) *UserSliceLoader {
 		hookAfterPrimeMany:        config.HookAfterPrimeMany,
 		hookAfterClear:            config.HookAfterClear,
 		hookAfterClearAll:         config.HookAfterClearAll,
+		hookAfterClearAllPrefix:   config.HookAfterClearAllPrefix,
 		hookAfterExpired:          config.HookAfterExpired,
 		redisConfig:               config.RedisConfig,
 	}
@@ -289,6 +293,9 @@ type UserSliceLoader struct {
 
 	// hookAfterClearAll is called after all values are cleared from the cache
 	hookAfterClearAll func()
+
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	hookAfterClearAllPrefix func(prefix string)
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key int)
@@ -770,6 +777,9 @@ func (l *UserSliceLoader) ClearAllPrefix(prefix string) {
 					l.redisConfig.DeleteFunc(context.Background(), key)
 				}
 			}
+			if l.hookAfterClearAllPrefix != nil {
+				l.hookAfterClearAllPrefix(prefix)
+			}
 			if l.hookAfterClearAll != nil {
 				l.hookAfterClearAll()
 			}
@@ -778,6 +788,9 @@ func (l *UserSliceLoader) ClearAllPrefix(prefix string) {
 	}
 	if l.hookExternalCacheClearAll != nil {
 		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAllPrefix != nil {
+			l.hookAfterClearAllPrefix(prefix)
+		}
 		if l.hookAfterClearAll != nil {
 			l.hookAfterClearAll()
 		}
@@ -802,6 +815,9 @@ func (l *UserSliceLoader) ClearAllPrefix(prefix string) {
 		l.mu.Unlock()
 	}
 
+	if l.hookAfterClearAllPrefix != nil {
+		l.hookAfterClearAllPrefix(prefix)
+	}
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}

@@ -168,26 +168,27 @@ func clearDataLoaderExpiredCache() {
 }
 ```
 
-2. Added ClearAll() which allows you to clear all cached items in loader
+2. Added `ClearAll()` and `ClearAllPrefix()` which allows you to clear all cached items in loader or optionally any string keys or Redis keys that start with the provided prefix. `ClearAll` calls `ClearAllPrefix` internally with an empty prefix value.
 3. Generated files will be in camelCase
-4. Added GenerateWithPrefix() which allows you to specify the prefix of a generated file
-5. Added ClearExpired() which allow you to clear all expired cached items in loader
-6. Added ForcePrime(key, value) which allows you to prime the cache with the provided key and value just like Prime() except that if the key already exists in the cache, the value is replaced. This removes the need to call Clear(key) then Prime(key, value) if desired
-7. Added PrimeMany([]keys, []values) which allows you to prime multiple key/values into the cache with a single call
-8. Add configuration to New{{LoadName}}Loader function.
+4. Added `GenerateWithPrefix()` which allows you to specify the prefix of a generated file
+5. Added `ClearExpired()` which allow you to clear all expired cached items in loader
+6. Added `ForcePrime(key, value)` which allows you to prime the cache with the provided key and value just like `Prime()` except that if the key already exists in the cache, the value is replaced. This removes the need to call `Clear(key)` then `Prime(key, value)` if desired
+7. Added `PrimeMany([]keys, []values)` which allows you to prime multiple key/values into the cache with a single call
+8. Add configuration to `New{{LoadName}}Loader` function.
 9. Batches are pre-allocated and re-used to lower allocations between Loads.
 10. Batches now use a slice as well as a map for key store and lookup. There is a slight memory usage penalty for the duplicate key values in the map but with the benefit of a performance increase seen in lookups instead of iterating over the keys in the slice. You can see this new usage in the keyIndex function. This performance change is really apparent when you have large maxBatch values.
-11. LoadThunk has the option to now return the value directly instead of having to wrap the cache find in a function to be called. This change was implemented in LoadThunk and return checking is done in Load. If no function was returned then the returned value is to be used.
+11. `LoadThunk` has the option to now return the value directly instead of having to wrap the cache find in a function to be called. This change was implemented in LoadThunk and return checking is done in Load. If no function was returned then the returned value is to be used.
 12. You can define Hook functions to be called after a key is set, cleared, when all keys are cleared, or an item is cleared because it has expired. 
 a. `HookAfterSet`: When a key is set in the dataloader, this function will be called if defined. This is performed inside `unsafeSet` so if the key already exists in the dataloader and forceReplace is not true when calling `unsafePrime`, then `HookAfterSet` will not get set.
 b. `HookAfterPrime`: When a key is set using Prime, ForcePrime, or PrimeMany, this function will be called if defined.
 c. `HookAfterPrimeMany`: When one or more keys are set using PrimeMany, this will function will be called if defined. If not defined but `HookAfterPrime` is, that hook will be called.
 d. `HookAfterClear`: When a key is cleared in the dataloader, this function will be called if defined. This does not occur when an existing key is being replaced or it's deleted because of expiration.
-e. `HookAfterClearAll`: When you call the `ClearAll` function to clear the entire dataloader cache, this function will be called if defined.
-f. `HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
-g. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
-h. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
-i. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
+e. `HookAfterClearAll`: When you call the `ClearAll` or `ClearAllPrefix` functions to clear the entire dataloader cache, this function will be called if defined.
+f. `HookAfterClearAllPrefix`: When you call the `ClearAll` or `ClearAllPrefix` function to clear the dataloader cache, with or without a prefix value, this function will be called if defined, passing the prefix value.
+g. `HookAfterExpired`: When a key is cleared because it has expired, this function will be called if defined. Clearing expired cached items only occurs when the key is interacted with while being loaded or cleared via `ClearExpired`. To be clear, this is not Hooked at the point the cached item becomes no longer valid, but when it's accessed and is determined as expired.
+h. `HookBeforeFetch`: Called right before a fetch is performed. Primarily used for tracing.
+i. `HookAfterFetch`: Called right after a fetch is performed. Primarily used for tracing.
+j. `HookExternalCacheGet`, `HookExternalCacheSet`, `HookExternalCacheDelete`, and `HookExternalCacheClearAll`: Bypass the internal cache and allows you to define your own functions to work with another cache source like Redis or another shared resource.
 13. Redis support. See Redis Support section below for more details.
 
 #### Redis Support

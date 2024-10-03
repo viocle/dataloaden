@@ -88,6 +88,9 @@ type {{.Name}}Config struct {
 
 	// HookAfterClearAll is called after all values are cleared from the cache
 	HookAfterClearAll func()
+
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	HookAfterClearAllPrefix func(prefix string)
 	
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key {{.KeyType.String}})
@@ -130,6 +133,7 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 		hookAfterPrimeMany: config.HookAfterPrimeMany,
 		hookAfterClear: config.HookAfterClear,
 		hookAfterClearAll: config.HookAfterClearAll,
+		hookAfterClearAllPrefix: config.HookAfterClearAllPrefix,
 		hookAfterExpired:  config.HookAfterExpired,
 		redisConfig: config.RedisConfig,
 	}
@@ -309,6 +313,9 @@ type {{.Name}} struct {
 	// hookAfterClearAll is called after all values are cleared from the cache
 	hookAfterClearAll func()
 	
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	hookAfterClearAllPrefix func(prefix string)
+
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key {{.KeyType.String}})
 
@@ -805,6 +812,9 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 					l.redisConfig.DeleteFunc(context.Background(), key)
 				}
 			}
+			if l.hookAfterClearAllPrefix != nil {
+				l.hookAfterClearAllPrefix(prefix)
+			}
 			if l.hookAfterClearAll != nil {
 				l.hookAfterClearAll()
 			}
@@ -813,6 +823,9 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 	}
 	if l.hookExternalCacheClearAll != nil {
 		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAllPrefix != nil {
+				l.hookAfterClearAllPrefix(prefix)
+		}
 		if l.hookAfterClearAll != nil {
 			l.hookAfterClearAll()
 		}
@@ -860,6 +873,9 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 		l.mu.Unlock()
 	}
 	{{ end }}
+	if l.hookAfterClearAllPrefix != nil {
+		l.hookAfterClearAllPrefix(prefix)
+	}
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}

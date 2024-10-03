@@ -72,6 +72,9 @@ type UserLoaderConfig struct {
 	// HookAfterClearAll is called after all values are cleared from the cache
 	HookAfterClearAll func()
 
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	HookAfterClearAllPrefix func(prefix string)
+
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key string)
 
@@ -111,6 +114,7 @@ func NewUserLoader(config UserLoaderConfig) *UserLoader {
 		hookAfterPrimeMany:        config.HookAfterPrimeMany,
 		hookAfterClear:            config.HookAfterClear,
 		hookAfterClearAll:         config.HookAfterClearAll,
+		hookAfterClearAllPrefix:   config.HookAfterClearAllPrefix,
 		hookAfterExpired:          config.HookAfterExpired,
 		redisConfig:               config.RedisConfig,
 	}
@@ -287,6 +291,9 @@ type UserLoader struct {
 
 	// hookAfterClearAll is called after all values are cleared from the cache
 	hookAfterClearAll func()
+
+	// HookAfterClearAllPrefix is called after all values are cleared from the cache
+	hookAfterClearAllPrefix func(prefix string)
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key string)
@@ -759,6 +766,9 @@ func (l *UserLoader) ClearAllPrefix(prefix string) {
 					l.redisConfig.DeleteFunc(context.Background(), key)
 				}
 			}
+			if l.hookAfterClearAllPrefix != nil {
+				l.hookAfterClearAllPrefix(prefix)
+			}
 			if l.hookAfterClearAll != nil {
 				l.hookAfterClearAll()
 			}
@@ -767,6 +777,9 @@ func (l *UserLoader) ClearAllPrefix(prefix string) {
 	}
 	if l.hookExternalCacheClearAll != nil {
 		l.hookExternalCacheClearAll()
+		if l.hookAfterClearAllPrefix != nil {
+			l.hookAfterClearAllPrefix(prefix)
+		}
 		if l.hookAfterClearAll != nil {
 			l.hookAfterClearAll()
 		}
@@ -809,6 +822,9 @@ func (l *UserLoader) ClearAllPrefix(prefix string) {
 		l.mu.Unlock()
 	}
 
+	if l.hookAfterClearAllPrefix != nil {
+		l.hookAfterClearAllPrefix(prefix)
+	}
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}
