@@ -415,9 +415,16 @@ func (l *UserValueByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]User, []er
 		}
 		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
 		if err != nil {
-			// return errors for all keys
-			for i := range errors {
-				errors[i] = err
+			// error occurred performing GetMany, add keys to batch to perform fetch instead
+			for i, key := range keys {
+				if v, thunk := l.unsafeAddToBatch(key); thunk != nil {
+					thunks[i] = thunk
+				} else {
+					retVals[i] = v
+				}
+			}
+			for i, thunk := range thunks {
+				retVals[i], errors[i] = thunk()
 			}
 			return retVals, errors
 		} else if len(vS) != len(keys) || len(errs) != len(keys) {
