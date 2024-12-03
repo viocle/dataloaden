@@ -403,12 +403,11 @@ func (l *StringLoader) LoadThunk(key string) (string, func() (string, error)) {
 	return l.unsafeAddToBatch(key)
 }
 
-// unsafeAddToBatch adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.lock() to have been called prior to calling this method.
-func (l *StringLoader) unsafeAddToBatch(key string) (string, func() (string, error)) {
+// unsafeAddToBatchNoLock adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.Lock() to have been called prior to calling this method and l.mu.Unlock() to be called after.
+func (l *StringLoader) unsafeAddToBatchNoLock(key string) (string, func() (string, error)) {
 	l.unsafeBatchSet()
 	batch := l.batch
 	pos := batch.keyIndex(l, key)
-	l.mu.Unlock()
 
 	return "", func() (string, error) {
 		<-batch.done
@@ -423,6 +422,14 @@ func (l *StringLoader) unsafeAddToBatch(key string) (string, func() (string, err
 
 		return data, err
 	}
+}
+
+// unsafeAddToBatch adds the key to the current batch and returns a thunk to be called later. This method is not thread safe. Expects l.mu.Lock() to have been called prior to calling this method.
+func (l *StringLoader) unsafeAddToBatch(key string) (string, func() (string, error)) {
+	f, err := l.unsafeAddToBatchNoLock(key)
+	l.mu.Unlock()
+
+	return f, err
 }
 
 // LoadAll fetches many keys at once. It will be broken into appropriate sized
@@ -443,14 +450,16 @@ func (l *StringLoader) LoadAll(keys []string) ([]string, []error) {
 		}
 		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
 		if err != nil {
-			// error occurred, add keys to batch to perform fetch
+			// error occurred performing GetMany, add keys to batch to perform fetch instead
+			l.mu.Lock()
 			for i, key := range keys {
-				if v, thunk := l.unsafeAddToBatch(key); thunk != nil {
+				if v, thunk := l.unsafeAddToBatchNoLock(key); thunk != nil {
 					thunks[i] = thunk
 				} else {
 					retVals[i] = v
 				}
 			}
+			l.mu.Unlock()
 			for i, thunk := range thunks {
 				retVals[i], errors[i] = thunk()
 			}
