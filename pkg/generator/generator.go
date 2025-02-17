@@ -110,7 +110,7 @@ func getData(config Config) (templateData, error) {
 	data.DisableCacheExpiration = config.DisableCacheExpiration
 	genPkg := getPackage(config.WorkingDirectory)
 	if genPkg == nil {
-		return templateData{}, fmt.Errorf("unable to find package info for " + config.WorkingDirectory)
+		return templateData{}, fmt.Errorf("unable to find package info for: %s", config.WorkingDirectory)
 	}
 
 	var err error
