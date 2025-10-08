@@ -363,36 +363,38 @@ sessionBasedOrgLoader = NewOrganizationLoader(OrganizationLoaderConfig{
 
 This fork (new tests/benchmarks have been added):
 ```
+example\> go version
+go version go1.25.2 windows/amd64
 example\> go test -bench . -benchmem
 goos: windows
 goarch: amd64
 pkg: github.com/viocle/dataloaden/example
 cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       27250312              44.55 ns/op            10 B/op          0 allocs/op
-BenchmarkLoader/random_spread-24                 2902282              600.2 ns/op           387 B/op          4 allocs/op
-BenchmarkLoader/concurrently-24                      100           14177922 ns/op          2808 B/op         46 allocs/op
-BenchmarkLoaderStruct/caches-24                 21124952              56.86 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/random_spread-24          20847738              56.86 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/concurrently-24            1000000               1090 ns/op            21 B/op          6 allocs/op
-BenchmarkLoaderExpires/caches-24                26666428              45.14 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExpires/random_spread-24          2787622              645.7 ns/op           407 B/op          5 allocs/op
-BenchmarkLoaderExpires/concurrently-24               100           14729930 ns/op          3067 B/op         56 allocs/op
-BenchmarkLoaderExternalCache/caches-24          24000540              46.44 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExternalCache/random_spread-24    2823822              612.3 ns/op           404 B/op          4 allocs/op
-BenchmarkLoaderExternalCache/concurrently-24         100           15002093 ns/op          2597 B/op         46 allocs/op
+BenchmarkLoader/caches-24                       30548420               39.39 ns/op            10 B/op          0 allocs/op
+BenchmarkLoader/random_spread-24                 2394642               656.4 ns/op           285 B/op          4 allocs/op
+BenchmarkLoader/concurrently-24                    12636              115739 ns/op          5718 B/op         46 allocs/op
+BenchmarkLoaderStruct/caches-24                 17772248               59.46 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/random_spread-24          20186115               59.84 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/concurrently-24             870000                1332 ns/op            21 B/op          6 allocs/op
+BenchmarkLoaderExpires/caches-24                29216272               41.94 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExpires/random_spread-24          2164833               657.7 ns/op           281 B/op          5 allocs/op
+BenchmarkLoaderExpires/concurrently-24             22234               64659 ns/op          4524 B/op         56 allocs/op
+BenchmarkLoaderExternalCache/caches-24          29433478               41.85 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExternalCache/random_spread-24    2471017               610.1 ns/op           269 B/op          4 allocs/op
+BenchmarkLoaderExternalCache/concurrently-24       15625               73986 ns/op          6713 B/op         46 allocs/op
 PASS
-ok      github.com/viocle/dataloaden/example    19.834s
+ok      github.com/viocle/dataloaden/example    21.772s
 
 example\slice\> go test -bench . -benchmem
 goos: windows
 goarch: amd64
-pkg: github.com/viocle/dataloaden/example/slice
+pkg: github.com/viocle/dataloaden/example/slice     
 cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkSliceLoader/caches-24                  28080801              39.35 ns/op            25 B/op          0 allocs/op
-BenchmarkSliceLoader/random_spread-24           31927885              40.56 ns/op            26 B/op          0 allocs/op
-BenchmarkSliceLoader/concurrently-24                 757            1603486 ns/op           160 B/op          3 allocs/op
+BenchmarkSliceLoader/caches-24          24420793              47.57 ns/op            24 B/op          0 allocs/op
+BenchmarkSliceLoader/random_spread-24   23969558              47.23 ns/op            24 B/op          0 allocs/op
+BenchmarkSliceLoader/concurrently-24      195772              5138 ns/op             182 B/op         3 allocs/op
 PASS
-ok      github.com/viocle/dataloaden/example/slice      4.928s
+ok      github.com/viocle/dataloaden/example/slice      4.544s
 ```
 
 Parent package (wth new struct key of type UserByIDAndOrg struct{ID string; OrgID string} example and benchmark in slice package added):
