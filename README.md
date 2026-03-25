@@ -364,61 +364,63 @@ sessionBasedOrgLoader = NewOrganizationLoader(OrganizationLoaderConfig{
 This fork (new tests/benchmarks have been added):
 ```
 example\> go version
-go version go1.25.2 windows/amd64
+go version go1.25.5 linux/amd64
 example\> go test -bench . -benchmem
-goos: windows
+goos: linux
 goarch: amd64
 pkg: github.com/viocle/dataloaden/example
-cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       30548420               39.39 ns/op            10 B/op          0 allocs/op
-BenchmarkLoader/random_spread-24                 2394642               656.4 ns/op           285 B/op          4 allocs/op
-BenchmarkLoader/concurrently-24                    12636              115739 ns/op          5718 B/op         46 allocs/op
-BenchmarkLoaderStruct/caches-24                 17772248               59.46 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/random_spread-24          20186115               59.84 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderStruct/concurrently-24             870000                1332 ns/op            21 B/op          6 allocs/op
-BenchmarkLoaderExpires/caches-24                29216272               41.94 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExpires/random_spread-24          2164833               657.7 ns/op           281 B/op          5 allocs/op
-BenchmarkLoaderExpires/concurrently-24             22234               64659 ns/op          4524 B/op         56 allocs/op
-BenchmarkLoaderExternalCache/caches-24          29433478               41.85 ns/op            10 B/op          0 allocs/op
-BenchmarkLoaderExternalCache/random_spread-24    2471017               610.1 ns/op           269 B/op          4 allocs/op
-BenchmarkLoaderExternalCache/concurrently-24       15625               73986 ns/op          6713 B/op         46 allocs/op
+cpu: AMD Ryzen 9 9950X3D 16-Core Processor          
+BenchmarkLoader/caches-32                       45378384             25.88 ns/op            10 B/op          0 allocs/op
+BenchmarkLoader/random_spread-32                 4301707             414.4 ns/op           305 B/op          4 allocs/op
+BenchmarkLoader/concurrently-32                    20094             50110 ns/op          2991 B/op         60 allocs/op
+BenchmarkLoaderStruct/caches-32                 30291880             38.44 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/random_spread-32          30213384             38.03 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderStruct/concurrently-32            1878213             635.7 ns/op            21 B/op          6 allocs/op
+BenchmarkLoaderExpires/caches-32                20555971             57.78 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExpires/random_spread-32          3205364             546.6 ns/op           347 B/op          5 allocs/op
+BenchmarkLoaderExpires/concurrently-32             27816             43547 ns/op          3255 B/op         72 allocs/op
+BenchmarkLoaderExternalCache/caches-32          42311577             26.87 ns/op            10 B/op          0 allocs/op
+BenchmarkLoaderExternalCache/random_spread-32    3942690             455.5 ns/op           309 B/op          4 allocs/op
+BenchmarkLoaderExternalCache/concurrently-32       30016             36968 ns/op          3114 B/op         62 allocs/op
 PASS
-ok      github.com/viocle/dataloaden/example    21.772s
+ok      github.com/viocle/dataloaden/example    22.588s
 
 example\slice\> go test -bench . -benchmem
-goos: windows
+goos: linux
 goarch: amd64
-pkg: github.com/viocle/dataloaden/example/slice     
-cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkSliceLoader/caches-24          24420793              47.57 ns/op            24 B/op          0 allocs/op
-BenchmarkSliceLoader/random_spread-24   23969558              47.23 ns/op            24 B/op          0 allocs/op
-BenchmarkSliceLoader/concurrently-24      195772              5138 ns/op             182 B/op         3 allocs/op
+pkg: github.com/viocle/dataloaden/example/slice
+cpu: AMD Ryzen 9 9950X3D 16-Core Processor          
+BenchmarkSliceLoader/caches-32          41667284             28.03 ns/op           21 B/op          0 allocs/op
+BenchmarkSliceLoader/random_spread-32   44261595             28.03 ns/op           21 B/op          0 allocs/op
+BenchmarkSliceLoader/concurrently-32      188372              5828 ns/op          251 B/op          3 allocs/op
 PASS
-ok      github.com/viocle/dataloaden/example/slice      4.544s
+ok      github.com/viocle/dataloaden/example/slice      4.585s
 ```
 
 Parent package (wth new struct key of type UserByIDAndOrg struct{ID string; OrgID string} example and benchmark in slice package added):
 ```
 example\> go test -bench . -benchmem
+goos: linux
+goarch: amd64
 pkg: github.com/vektah/dataloaden/example
-cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkLoader/caches-24                       16564267              70.18 ns/op            26 B/op          1 allocs/op
-BenchmarkLoader/random_spread-24                 2370126              685.5 ns/op           359 B/op          4 allocs/op
-BenchmarkLoader/concurently-24                       100           15033075 ns/op          2578 B/op         52 allocs/op
-BenchmarkLoaderStruct/caches-24                 12949425              78.80 ns/op            26 B/op          1 allocs/op
-BenchmarkLoaderStruct/random_spread-24          14267574              78.47 ns/op            26 B/op          1 allocs/op
-BenchmarkLoaderStruct/concurently-24              771639               1423 ns/op           181 B/op         16 allocs/op
+cpu: AMD Ryzen 9 9950X3D 16-Core Processor          
+BenchmarkLoader/caches-32                       29856174               37.57 ns/op            26 B/op          1 allocs/op
+BenchmarkLoader/random_spread-32                 3320210               526.8 ns/op           327 B/op          4 allocs/op
+BenchmarkLoader/concurently-32                     30576               37963 ns/op          3168 B/op         69 allocs/op
+BenchmarkLoaderStruct/caches-32                 21381021               53.66 ns/op            26 B/op          1 allocs/op
+BenchmarkLoaderStruct/random_spread-32          19585868               56.09 ns/op            26 B/op          1 allocs/op
+BenchmarkLoaderStruct/concurrently-32            1274100               940.9 ns/op           181 B/op         16 allocs/op
 PASS
-ok      github.com/vektah/dataloaden/example    8.857s
+ok      github.com/vektah/dataloaden/example    12.817s
 
 example\slice\> go test -bench . -benchmem
-goos: windows
+goos: linux
 goarch: amd64
 pkg: github.com/vektah/dataloaden/example/slice
-cpu: AMD Ryzen 9 5900X 12-Core Processor
-BenchmarkSliceLoader/caches-24                  16997695              66.47 ns/op            50 B/op          1 allocs/op
-BenchmarkSliceLoader/random_spread-24           16678016              62.33 ns/op            50 B/op          1 allocs/op
-BenchmarkSliceLoader/concurently-24                  825            1525405 ns/op           471 B/op         13 allocs/op
+cpu: AMD Ryzen 9 9950X3D 16-Core Processor          
+BenchmarkSliceLoader/caches-32          25884763              42.30 ns/op           50 B/op          1 allocs/op
+BenchmarkSliceLoader/random_spread-32   25050834              44.82 ns/op           50 B/op          1 allocs/op
+BenchmarkSliceLoader/concurrently-32      180957               5590 ns/op          541 B/op         14 allocs/op
 PASS
-ok      github.com/vektah/dataloaden/example/slice      5.051s
+ok      github.com/vektah/dataloaden/example/slice      4.277s
 ```

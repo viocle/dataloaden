@@ -184,8 +184,20 @@ func New{{.Name}}(config {{.Name}}Config) *{{.Name}} {
 	return l
 }
 
+// Context returns a context to use for Redis requests. If RequestTimeout is set in the RedisConfig, the context will have a timeout set. Otherwise, a background context will be returned.
+func (r *{{.Name}}RedisConfig) Context() (context.Context, context.CancelFunc) {
+	if r.RequestTimeout != nil {
+		return context.WithTimeout(context.Background(), *r.RequestTimeout)
+	}
+	return context.Background(), func() {}
+}
+
 // {{.Name}}RedisConfig is used to configure a {{.Name}} backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
 type {{.Name}}RedisConfig struct {
+	// RequestTimeout is the expiration time set on the context for each Redis command. If nil, no timeout will be set on the context for Redis requests.
+	// Your Redis funcs can still handle timeouts themselves if you want, this is just a convenience to set a timeout on the context for you.
+	RequestTimeout *time.Duration
+
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
@@ -380,36 +392,39 @@ func (l *{{.Name}}) createNewBatch() *{{.Name|lcFirst}}Batch {
 func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, func() ({{.ValType.String}}, error)) {
 	if l.redisConfig != nil {
 		// using Redis
-			v, err := l.redisConfig.GetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		v, err := l.redisConfig.GetFunc(ctx, {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
 		if err == nil {
 			{{ if eq .KeyType.String "string" }}{{.ValType.String|LoadThunkMarshalType}}
 			{{else}}// found in Redis, attempt to return value
 			{{.ValType.String|LoadThunkMarshalType}}
 			// error unmarshalling, just add to batch{{end}}
 		}
-		// not found in Redis or error, continue
-		l.mu.Lock() // unsafeAddToBatch will unlock
+		// not found in Redis or error, continue to batch
+	} else if l.hookExternalCacheGet != nil {
+		if v, ok := l.hookExternalCacheGet(key); ok {
+			return v, nil
+		}
+		// not found in external cache, continue to batch
 	} else {
-		if l.hookExternalCacheGet != nil {
-			if v, ok := l.hookExternalCacheGet(key); ok {
-				return v, nil
+		{{ if not .DisableCacheExpiration }}
+		if l.expireAfter <= 0 {
+			// not using cache expiration - fast path
+			l.mu.Lock()
+			if it, ok := l.cache[key]; ok {
+				l.mu.Unlock()
+				return it, nil
 			}
-			// not found in external cache, continue
-			l.mu.Lock() // unsafeAddToBatch will unlock
+			// cache miss, keep lock held for batch add
 		} else {
-			l.mu.Lock() // unsafeAddToBatch will unlock
-			{{ if not .DisableCacheExpiration }}
-			if l.expireAfter <= 0 && len(l.cache) > 0 {
-				// not using cache expiration
-				if it, ok := l.cache[key]; ok {
-					l.mu.Unlock()
-					return it, nil
-				}
-			} else if l.expireAfter > 0 && len(l.cacheExpire) > 0 {
-				// using cache expiration
-				l.unsafeBatchSet()
-				if it, ok := l.cacheExpire[key]; ok {
-					if it != nil && !it.expired(l.batch.now) {
+			// using cache expiration - need to check expiration
+			l.mu.Lock()
+			if it, ok := l.cacheExpire[key]; ok {
+				if it != nil {
+					// check if cache item has expired
+					if !it.expired(time.Now().UnixNano()) {
+						// valid cached value
 						l.mu.Unlock()
 						return it.Value, nil
 					}
@@ -420,15 +435,21 @@ func (l *{{.Name}}) LoadThunk(key {{.KeyType.String}}) ({{.ValType.String}}, fun
 					}
 				}
 			}
-			{{ else }}
-			if len(l.cache) > 0 {
-				if it, ok := l.cache[key]; ok {
-					l.mu.Unlock()
-					return it, nil
-				}
-			}
-			{{ end }}
+			// cache miss or expired, keep lock held for batch add
 		}
+		{{ else }}
+		l.mu.Lock()
+		if it, ok := l.cache[key]; ok {
+			l.mu.Unlock()
+			return it, nil
+		}
+		{{ end }}
+	}
+
+	// Cache miss path - lock is already held from above or not needed (Redis/external)
+	if l.redisConfig != nil || l.hookExternalCacheGet != nil {
+		// need to acquire lock for batch operations
+		l.mu.Lock()
 	}
 	return l.unsafeAddToBatch(key)
 }
@@ -478,7 +499,9 @@ func (l *{{.Name}}) LoadAll(keys []{{.KeyType}}) ([]{{.ValType.String}}, []error
 		for idx, key := range keys {
 			rKeys[idx] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String }}
 		}
-		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		vS, errs, err := l.redisConfig.GetManyFunc(ctx, rKeys)
 		if err != nil {
 			// error occurred performing GetMany, add keys to batch to perform fetch instead
 			l.mu.Lock()
@@ -553,7 +576,9 @@ func (l *{{.Name}}) LoadAllThunk(keys []{{.KeyType}}) (func() ([]{{.ValType.Stri
 
 // redisPrime will set the key value pair in Redis
 func (l *{{.Name}}) redisPrime(key {{.KeyType}}, value {{.ValType.String}}) bool {
-	if err := l.redisConfig.SetFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }}, value, l.redisConfig.SetTTL); err != nil {
+	ctx, cancel := l.redisConfig.Context()
+	defer cancel()
+	if err := l.redisConfig.SetFunc(ctx, {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }}, value, l.redisConfig.SetTTL); err != nil {
 		return false
 	} else if l.hookAfterSet != nil {
 		l.hookAfterSet(key, value)
@@ -676,10 +701,14 @@ func (l *{{.Name}}) PrimeMany(keys []{{.KeyType}}, values []{{.ValType.String}})
 			for i, key := range keys {
 				kSet[i] = {{.Name}}CacheKeyPrefix + {{ToRedisKey .KeyType.String }}
 			}
+			ctx, cancel := l.redisConfig.Context()
+			defer cancel()
 			// call SetManyFunc with our keys and values
-			retErr, err := l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			retErr, err := l.redisConfig.SetManyFunc(ctx, kSet, vSet, l.redisConfig.SetTTL)
 			{{- else }}// call SetManyFunc with our keys and values
-			retErr, err := l.redisConfig.SetManyFunc(context.Background(), keys, vSet, l.redisConfig.SetTTL)
+			ctx, cancel := l.redisConfig.Context()
+			defer cancel()
+			retErr, err := l.redisConfig.SetManyFunc(ctx, keys, vSet, l.redisConfig.SetTTL)
 			{{- end }}
 			if err == nil {
 			 	// set the return values based on each key's error
@@ -780,7 +809,9 @@ func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
 func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.DeleteFunc(context.Background(), {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		l.redisConfig.DeleteFunc(ctx, {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
 		if l.hookAfterClear != nil {
 			l.hookAfterClear(key)
 		}
@@ -819,13 +850,15 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), {{.Name}}CacheKeyPrefix+prefix+"*")
+			ctx, cancel := l.redisConfig.Context()
+			defer cancel()
+			keys, _ := l.redisConfig.GetKeysFunc(ctx, {{.Name}}CacheKeyPrefix+prefix+"*")
 			// delete all these keys from Redis
 			if l.redisConfig.DeleteManyFunc != nil {
-				l.redisConfig.DeleteManyFunc(context.Background(), keys)
+				l.redisConfig.DeleteManyFunc(ctx, keys)
 			} else {
 				for _, key := range keys {
-					l.redisConfig.DeleteFunc(context.Background(), key)
+					l.redisConfig.DeleteFunc(ctx, key)
 				}
 			}
 			if l.hookAfterClearAllPrefix != nil {
@@ -978,7 +1011,7 @@ func (b *{{.Name|lcFirst}}Batch) keyIndex(l *{{.Name}}, key {{.KeyType}}) int {
 		go b.startTimer(l)
 	}
 
-	// have we reached out max batch size?
+	// have we reached our max batch size?
 	if l.maxBatch != 0 && pos >= l.maxBatch-1 {
 		if !b.closing {
 			// not already closing, close the batch and call end
@@ -1013,9 +1046,10 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 	if l.hookBeforeFetch != nil {
 		l.hookBeforeFetch(b.keys, "{{.Name}}")
 	}
+	// perform the fetch, size of data and errors slices will match size of keys slice
 	b.data, b.errors = l.fetch(b.keys)
-	if l.redisConfig != nil && len(b.errors)  > 0 {
-		// using Redis, set the cache here for all results without an error
+	if l.redisConfig != nil && len(b.data) == len(b.errors) && len(b.data) > 0 {
+		// using Redis, set the cache here for all results, checking for redis errors (only set non-error results)
 		if len(b.errors) > 1 && l.redisConfig.SetManyFunc != nil {
 			// multiple keys, build key/value set of non errors
 			kSet := make([]string, 0, len(b.keys))
@@ -1033,7 +1067,9 @@ func (b *{{.Name|lcFirst}}Batch) end(l *{{.Name}}) {
 			}
 			if len(kSet) > 0 {
 				// call SetManyFunc with our keys and values
-				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+				ctx, cancel := l.redisConfig.Context()
+				defer cancel()
+				l.redisConfig.SetManyFunc(ctx, kSet, vSet, l.redisConfig.SetTTL)
 			}
 		} else {
 			// only one key or SetManyFunc not set, set the value(s) if no error using batchResultSet
@@ -1063,7 +1099,7 @@ func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error)
 	// its convenient to be able to return a single error for everything
 	if len(b.errors) == 1 {
 		err = b.errors[0]
-	} else if b.errors != nil {
+	} else if pos < len(b.errors) {
 		err = b.errors[pos]
 	}
 
@@ -1074,7 +1110,6 @@ func (b *{{.Name|lcFirst}}Batch) getResult(pos int) ({{.ValType.String}}, error)
 		b.reqCount = 0
 		b.checkedIn = 0
 		clear(b.keysMap)
-		clear(b.keys)
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use
 		b.loader.batchPool.Put(b)

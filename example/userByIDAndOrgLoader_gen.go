@@ -146,8 +146,20 @@ func NewUserByIDAndOrgLoader(config UserByIDAndOrgLoaderConfig) *UserByIDAndOrgL
 	return l
 }
 
+// Context returns a context to use for Redis requests. If RequestTimeout is set in the RedisConfig, the context will have a timeout set. Otherwise, a background context will be returned.
+func (r *UserByIDAndOrgLoaderRedisConfig) Context() (context.Context, context.CancelFunc) {
+	if r.RequestTimeout != nil {
+		return context.WithTimeout(context.Background(), *r.RequestTimeout)
+	}
+	return context.Background(), func() {}
+}
+
 // UserByIDAndOrgLoaderRedisConfig is used to configure a UserByIDAndOrgLoader backed by Redis. GetFunc, SetFunc, and DeleteFunc are required if using Redis. If any function is not provided, Redis will be disabled and internal caching will be used.
 type UserByIDAndOrgLoaderRedisConfig struct {
+	// RequestTimeout is the expiration time set on the context for each Redis command. If nil, no timeout will be set on the context for Redis requests.
+	// Your Redis funcs can still handle timeouts themselves if you want, this is just a convenience to set a timeout on the context for you.
+	RequestTimeout *time.Duration
+
 	// SetTTL is the TTL (Time To Live) for a key to live in Redis on set. If nil, no TTL will be set.
 	SetTTL *time.Duration
 
@@ -335,7 +347,9 @@ func (l *UserByIDAndOrgLoader) createNewBatch() *userByIDAndOrgLoaderBatch {
 func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*User, error)) {
 	if l.redisConfig != nil {
 		// using Redis
-		v, err := l.redisConfig.GetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key))
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		v, err := l.redisConfig.GetFunc(ctx, UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key))
 		if err == nil {
 			// found in Redis, attempt to return value
 			if v == "" || v == "null" {
@@ -351,26 +365,26 @@ func (l *UserByIDAndOrgLoader) LoadThunk(key UserByIDAndOrg) (*User, func() (*Us
 			}
 			// error unmarshalling, just add to batch
 		}
-		// not found in Redis or error, continue
-		l.mu.Lock() // unsafeAddToBatch will unlock
-	} else {
-		if l.hookExternalCacheGet != nil {
-			if v, ok := l.hookExternalCacheGet(key); ok {
-				return v, nil
-			}
-			// not found in external cache, continue
-			l.mu.Lock() // unsafeAddToBatch will unlock
-		} else {
-			l.mu.Lock() // unsafeAddToBatch will unlock
-
-			if len(l.cache) > 0 {
-				if it, ok := l.cache[key]; ok {
-					l.mu.Unlock()
-					return it, nil
-				}
-			}
-
+		// not found in Redis or error, continue to batch
+	} else if l.hookExternalCacheGet != nil {
+		if v, ok := l.hookExternalCacheGet(key); ok {
+			return v, nil
 		}
+		// not found in external cache, continue to batch
+	} else {
+
+		l.mu.Lock()
+		if it, ok := l.cache[key]; ok {
+			l.mu.Unlock()
+			return it, nil
+		}
+
+	}
+
+	// Cache miss path - lock is already held from above or not needed (Redis/external)
+	if l.redisConfig != nil || l.hookExternalCacheGet != nil {
+		// need to acquire lock for batch operations
+		l.mu.Lock()
 	}
 	return l.unsafeAddToBatch(key)
 }
@@ -420,7 +434,9 @@ func (l *UserByIDAndOrgLoader) LoadAll(keys []UserByIDAndOrg) ([]*User, []error)
 		for idx, key := range keys {
 			rKeys[idx] = UserByIDAndOrgLoaderCacheKeyPrefix + l.redisConfig.KeyToStringFunc(key)
 		}
-		vS, errs, err := l.redisConfig.GetManyFunc(context.Background(), rKeys)
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		vS, errs, err := l.redisConfig.GetManyFunc(ctx, rKeys)
 		if err != nil {
 			// error occurred performing GetMany, add keys to batch to perform fetch instead
 			l.mu.Lock()
@@ -511,7 +527,9 @@ func (l *UserByIDAndOrgLoader) LoadAllThunk(keys []UserByIDAndOrg) func() ([]*Us
 
 // redisPrime will set the key value pair in Redis
 func (l *UserByIDAndOrgLoader) redisPrime(key UserByIDAndOrg, value *User) bool {
-	if err := l.redisConfig.SetFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key), value, l.redisConfig.SetTTL); err != nil {
+	ctx, cancel := l.redisConfig.Context()
+	defer cancel()
+	if err := l.redisConfig.SetFunc(ctx, UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key), value, l.redisConfig.SetTTL); err != nil {
 		return false
 	} else if l.hookAfterSet != nil {
 		l.hookAfterSet(key, value)
@@ -584,8 +602,10 @@ func (l *UserByIDAndOrgLoader) PrimeMany(keys []UserByIDAndOrg, values []*User) 
 			for i, key := range keys {
 				kSet[i] = UserByIDAndOrgLoaderCacheKeyPrefix + l.redisConfig.KeyToStringFunc(key)
 			}
+			ctx, cancel := l.redisConfig.Context()
+			defer cancel()
 			// call SetManyFunc with our keys and values
-			retErr, err := l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+			retErr, err := l.redisConfig.SetManyFunc(ctx, kSet, vSet, l.redisConfig.SetTTL)
 			if err == nil {
 				// set the return values based on each key's error
 				for i, err := range retErr {
@@ -685,7 +705,9 @@ func (l *UserByIDAndOrgLoader) ForcePrime(key UserByIDAndOrg, value *User) {
 func (l *UserByIDAndOrgLoader) Clear(key UserByIDAndOrg) {
 	if l.redisConfig != nil {
 		// using Redis
-		l.redisConfig.DeleteFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key))
+		ctx, cancel := l.redisConfig.Context()
+		defer cancel()
+		l.redisConfig.DeleteFunc(ctx, UserByIDAndOrgLoaderCacheKeyPrefix+l.redisConfig.KeyToStringFunc(key))
 		if l.hookAfterClear != nil {
 			l.hookAfterClear(key)
 		}
@@ -714,13 +736,15 @@ func (l *UserByIDAndOrgLoader) ClearAllPrefix(prefix string) {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
-			keys, _ := l.redisConfig.GetKeysFunc(context.Background(), UserByIDAndOrgLoaderCacheKeyPrefix+prefix+"*")
+			ctx, cancel := l.redisConfig.Context()
+			defer cancel()
+			keys, _ := l.redisConfig.GetKeysFunc(ctx, UserByIDAndOrgLoaderCacheKeyPrefix+prefix+"*")
 			// delete all these keys from Redis
 			if l.redisConfig.DeleteManyFunc != nil {
-				l.redisConfig.DeleteManyFunc(context.Background(), keys)
+				l.redisConfig.DeleteManyFunc(ctx, keys)
 			} else {
 				for _, key := range keys {
-					l.redisConfig.DeleteFunc(context.Background(), key)
+					l.redisConfig.DeleteFunc(ctx, key)
 				}
 			}
 			if l.hookAfterClearAllPrefix != nil {
@@ -802,7 +826,7 @@ func (b *userByIDAndOrgLoaderBatch) keyIndex(l *UserByIDAndOrgLoader, key UserBy
 		go b.startTimer(l)
 	}
 
-	// have we reached out max batch size?
+	// have we reached our max batch size?
 	if l.maxBatch != 0 && pos >= l.maxBatch-1 {
 		if !b.closing {
 			// not already closing, close the batch and call end
@@ -837,9 +861,10 @@ func (b *userByIDAndOrgLoaderBatch) end(l *UserByIDAndOrgLoader) {
 	if l.hookBeforeFetch != nil {
 		l.hookBeforeFetch(b.keys, "UserByIDAndOrgLoader")
 	}
+	// perform the fetch, size of data and errors slices will match size of keys slice
 	b.data, b.errors = l.fetch(b.keys)
-	if l.redisConfig != nil && len(b.errors) > 0 {
-		// using Redis, set the cache here for all results without an error
+	if l.redisConfig != nil && len(b.data) == len(b.errors) && len(b.data) > 0 {
+		// using Redis, set the cache here for all results, checking for redis errors (only set non-error results)
 		if len(b.errors) > 1 && l.redisConfig.SetManyFunc != nil {
 			// multiple keys, build key/value set of non errors
 			kSet := make([]string, 0, len(b.keys))
@@ -853,7 +878,9 @@ func (b *userByIDAndOrgLoaderBatch) end(l *UserByIDAndOrgLoader) {
 			}
 			if len(kSet) > 0 {
 				// call SetManyFunc with our keys and values
-				l.redisConfig.SetManyFunc(context.Background(), kSet, vSet, l.redisConfig.SetTTL)
+				ctx, cancel := l.redisConfig.Context()
+				defer cancel()
+				l.redisConfig.SetManyFunc(ctx, kSet, vSet, l.redisConfig.SetTTL)
 			}
 		} else {
 			// only one key or SetManyFunc not set, set the value(s) if no error using batchResultSet
@@ -883,7 +910,7 @@ func (b *userByIDAndOrgLoaderBatch) getResult(pos int) (*User, error) {
 	// its convenient to be able to return a single error for everything
 	if len(b.errors) == 1 {
 		err = b.errors[0]
-	} else if b.errors != nil {
+	} else if pos < len(b.errors) {
 		err = b.errors[pos]
 	}
 
@@ -894,7 +921,6 @@ func (b *userByIDAndOrgLoaderBatch) getResult(pos int) (*User, error) {
 		b.reqCount = 0
 		b.checkedIn = 0
 		clear(b.keysMap)
-		clear(b.keys)
 		b.lock.Unlock()
 		// all thunks have checked in, return batch to pool for re-use
 		b.loader.batchPool.Put(b)

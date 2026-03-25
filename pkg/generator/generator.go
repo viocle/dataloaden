@@ -283,8 +283,10 @@ func ToRedisKey(t string) string {
 	}
 	// we'll need to convert the type to a string
 	switch t {
-	case "byte", "int8", "int16", "int32", "rune", "int":
-		return "strconv.FormatInt(int64(key), 10)"
+	case "byte", "int8", "int16", "int32", "rune":
+		return "strconv.Itoa(int(key))"
+	case "int":
+		return "strconv.Itoa(key)"
 	case "int64":
 		// dont include unnecessary type conversion
 		return "strconv.FormatInt(key, 10)"
