@@ -330,6 +330,21 @@ type userLoaderBatch struct {
 	checkedIn int
 }
 
+// Reset the dataloader instance for re-use. This will clear the internal cache if being used and any existing batch. This does not affect external caches or Redis if being used.
+func (l *UserLoader) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// if not using redis, clear the internal cache maps
+	if l.redisConfig == nil {
+
+		l.cacheExpire = make(map[string]*UserLoaderCacheItem)
+
+	}
+	// reset the batch to nil, any existing batch will be garbage collected and a new batch will be created on the next request
+	l.batch = nil
+}
+
 // Load a User by key, batching and caching will be applied automatically
 func (l *UserLoader) Load(key string) (*example.User, error) {
 	v, f := l.LoadThunk(key)

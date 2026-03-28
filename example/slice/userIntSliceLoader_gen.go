@@ -330,6 +330,21 @@ type userIntSliceLoaderBatch struct {
 	checkedIn int
 }
 
+// Reset the dataloader instance for re-use. This will clear the internal cache if being used and any existing batch. This does not affect external caches or Redis if being used.
+func (l *UserIntSliceLoader) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// if not using redis, clear the internal cache maps
+	if l.redisConfig == nil {
+
+		l.cacheExpire = make(map[int]*UserIntSliceLoaderCacheItem)
+
+	}
+	// reset the batch to nil, any existing batch will be garbage collected and a new batch will be created on the next request
+	l.batch = nil
+}
+
 // Load a User by key, batching and caching will be applied automatically
 func (l *UserIntSliceLoader) Load(key int) ([]*example.User, error) {
 	v, f := l.LoadThunk(key)

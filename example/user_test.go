@@ -392,4 +392,17 @@ func TestUserStructLoader(t *testing.T) {
 		require.Error(t, err2[1])
 		require.Equal(t, "user U6", users2[0].Name)
 	})
+
+	t.Run("reset clears internal cache", func(t *testing.T) {
+		key := UserByIDAndOrg{OrgID: "1", ID: "U1"}
+
+		// confirm the key is present in the internal cache from prior test runs
+		_, exists := dl.cache[key]
+		require.True(t, exists, "expected key to be present in cache before reset")
+
+		dl.Reset()
+
+		_, exists = dl.cache[key]
+		require.False(t, exists, "expected key to be absent from cache after reset")
+	})
 }
