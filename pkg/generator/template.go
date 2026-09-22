@@ -823,23 +823,26 @@ func (l *{{.Name}}) ForcePrime(key {{.KeyType}}, value {{.ValType.String}}) {
 }
 
 // Clear the value at key from the cache, if it exists
-func (l *{{.Name}}) Clear(key {{.KeyType}}) {
+func (l *{{.Name}}) Clear(key {{.KeyType}}) error {
 	if l.redisConfig != nil {
 		// using Redis
 		ctx, cancel := l.redisConfig.Context()
 		defer cancel()
-		l.redisConfig.DeleteFunc(ctx, {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
+		err := l.redisConfig.DeleteFunc(ctx, {{.Name}}CacheKeyPrefix+{{ToRedisKey .KeyType.String }})
+		if err != nil {
+			return err
+		}
 		if l.hookAfterClear != nil {
 			l.hookAfterClear(key)
 		}
-		return
+		return nil
 	}
 	if l.hookExternalCacheDelete != nil {
 		l.hookExternalCacheDelete(key)
 		if l.hookAfterClear != nil {
 			l.hookAfterClear(key)
 		}
-		return 
+		return nil
 	}
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
@@ -859,24 +862,32 @@ func (l *{{.Name}}) Clear(key {{.KeyType}}) {
 	if l.hookAfterClear != nil {
 		l.hookAfterClear(key)
 	}
+	return nil
 }
 
 // ClearAllPrefix clears all values from the cache that match the given prefix (after the cache key prefix if using Redis) Prefix filtering is only used when using Redis and GetKeysFunc is defined or your key type is a string, otherwise all keys are cleared.
-func (l *{{.Name}}) ClearAllPrefix(prefix string) {
+func (l *{{.Name}}) ClearAllPrefix(prefix string) error {
 	if l.redisConfig != nil {
 		// using Redis
 		if l.redisConfig.GetKeysFunc != nil {
 			// get all keys from Redis
 			ctx, cancel := l.redisConfig.Context()
 			defer cancel()
-			keys, _ := l.redisConfig.GetKeysFunc(ctx, {{.Name}}CacheKeyPrefix+prefix+"*")
+			keys, err := l.redisConfig.GetKeysFunc(ctx, {{.Name}}CacheKeyPrefix+prefix+"*")
+			if len(keys) <= 0 && err != nil {
+				return err
+			}
+			err = nil // reset err before attempting deletion
 			// delete all these keys from Redis
 			if l.redisConfig.DeleteManyFunc != nil {
-				l.redisConfig.DeleteManyFunc(ctx, keys)
+				err = l.redisConfig.DeleteManyFunc(ctx, keys)
 			} else {
 				for _, key := range keys {
-					l.redisConfig.DeleteFunc(ctx, key)
+					err = l.redisConfig.DeleteFunc(ctx, key)
 				}
+			}
+			if err != nil {
+				return err
 			}
 			if l.hookAfterClearAllPrefix != nil {
 				l.hookAfterClearAllPrefix(prefix)
@@ -885,7 +896,7 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 				l.hookAfterClearAll()
 			}
 		}
-		return
+		return nil
 	}
 	if l.hookExternalCacheClearAll != nil {
 		l.hookExternalCacheClearAll()
@@ -895,7 +906,7 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 		if l.hookAfterClearAll != nil {
 			l.hookAfterClearAll()
 		}
-		return 
+		return nil
 	}
 	{{ if not .DisableCacheExpiration }}
 	if l.expireAfter <= 0 {
@@ -945,11 +956,12 @@ func (l *{{.Name}}) ClearAllPrefix(prefix string) {
 	if l.hookAfterClearAll != nil {
 		l.hookAfterClearAll()
 	}
+	return nil
 }
 
 // ClearAll clears all values from the cache
-func (l *{{.Name}}) ClearAll() {
-	l.ClearAllPrefix("")
+func (l *{{.Name}}) ClearAll() error {
+	return l.ClearAllPrefix("")
 }
 
 {{ if not .DisableCacheExpiration }}
