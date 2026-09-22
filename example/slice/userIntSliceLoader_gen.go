@@ -69,13 +69,13 @@ type UserIntSliceLoaderConfig struct {
 	HookAfterPrimeMany func(keys []int, values [][]*example.User)
 
 	// HookAfterClear is called after a value is cleared from the cache
-	HookAfterClear func(key int)
+	HookAfterClear func(key int) error
 
 	// HookAfterClearAll is called after all values are cleared from the cache
-	HookAfterClearAll func()
+	HookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	HookAfterClearAllPrefix func(prefix string)
+	HookAfterClearAllPrefix func(prefix string) error
 
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key int)
@@ -301,13 +301,13 @@ type UserIntSliceLoader struct {
 	hookAfterPrimeMany func(keys []int, values [][]*example.User)
 
 	// hookAfterClear is called after a value is cleared from the cache
-	hookAfterClear func(key int)
+	hookAfterClear func(key int) error
 
 	// hookAfterClearAll is called after all values are cleared from the cache
-	hookAfterClearAll func()
+	hookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	hookAfterClearAllPrefix func(prefix string)
+	hookAfterClearAllPrefix func(prefix string) error
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key int)

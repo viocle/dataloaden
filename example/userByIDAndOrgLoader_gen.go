@@ -63,13 +63,13 @@ type UserByIDAndOrgLoaderConfig struct {
 	HookAfterPrimeMany func(keys []UserByIDAndOrg, values []*User)
 
 	// HookAfterClear is called after a value is cleared from the cache
-	HookAfterClear func(key UserByIDAndOrg)
+	HookAfterClear func(key UserByIDAndOrg) error
 
 	// HookAfterClearAll is called after all values are cleared from the cache
-	HookAfterClearAll func()
+	HookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	HookAfterClearAllPrefix func(prefix string)
+	HookAfterClearAllPrefix func(prefix string) error
 
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key UserByIDAndOrg)
@@ -275,13 +275,13 @@ type UserByIDAndOrgLoader struct {
 	hookAfterPrimeMany func(keys []UserByIDAndOrg, values []*User)
 
 	// hookAfterClear is called after a value is cleared from the cache
-	hookAfterClear func(key UserByIDAndOrg)
+	hookAfterClear func(key UserByIDAndOrg) error
 
 	// hookAfterClearAll is called after all values are cleared from the cache
-	hookAfterClearAll func()
+	hookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	hookAfterClearAllPrefix func(prefix string)
+	hookAfterClearAllPrefix func(prefix string) error
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key UserByIDAndOrg)

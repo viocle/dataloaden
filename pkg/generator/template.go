@@ -84,13 +84,13 @@ type {{.Name}}Config struct {
 	HookAfterPrimeMany func(keys []{{.KeyType.String}}, values []{{.ValType.String}})
 
 	// HookAfterClear is called after a value is cleared from the cache
-	HookAfterClear func(key {{.KeyType.String}})
+	HookAfterClear func(key {{.KeyType.String}}) error
 
 	// HookAfterClearAll is called after all values are cleared from the cache
-	HookAfterClearAll func()
+	HookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	HookAfterClearAllPrefix func(prefix string)
+	HookAfterClearAllPrefix func(prefix string) error
 	
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key {{.KeyType.String}})
@@ -320,13 +320,13 @@ type {{.Name}} struct {
 	hookAfterPrimeMany func(keys []{{.KeyType.String}}, values []{{.ValType.String}})
 
 	// hookAfterClear is called after a value is cleared from the cache
-	hookAfterClear func(key {{.KeyType.String}})
+	hookAfterClear func(key {{.KeyType.String}}) error
 
 	// hookAfterClearAll is called after all values are cleared from the cache
-	hookAfterClearAll func()
+	hookAfterClearAll func() error
 	
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	hookAfterClearAllPrefix func(prefix string)
+	hookAfterClearAllPrefix func(prefix string) error
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key {{.KeyType.String}})

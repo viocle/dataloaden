@@ -67,13 +67,13 @@ type UserFloatLoaderConfig struct {
 	HookAfterPrimeMany func(keys []float64, values []*User)
 
 	// HookAfterClear is called after a value is cleared from the cache
-	HookAfterClear func(key float64)
+	HookAfterClear func(key float64) error
 
 	// HookAfterClearAll is called after all values are cleared from the cache
-	HookAfterClearAll func()
+	HookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	HookAfterClearAllPrefix func(prefix string)
+	HookAfterClearAllPrefix func(prefix string) error
 
 	// HookAfterExpired is called after a value is cleared in the cache due to expiration
 	HookAfterExpired func(key float64)
@@ -299,13 +299,13 @@ type UserFloatLoader struct {
 	hookAfterPrimeMany func(keys []float64, values []*User)
 
 	// hookAfterClear is called after a value is cleared from the cache
-	hookAfterClear func(key float64)
+	hookAfterClear func(key float64) error
 
 	// hookAfterClearAll is called after all values are cleared from the cache
-	hookAfterClearAll func()
+	hookAfterClearAll func() error
 
 	// HookAfterClearAllPrefix is called after all values are cleared from the cache
-	hookAfterClearAllPrefix func(prefix string)
+	hookAfterClearAllPrefix func(prefix string) error
 
 	// hookAfterExpired is called after a value is cleared in the cache due to expiration
 	hookAfterExpired func(key float64)
